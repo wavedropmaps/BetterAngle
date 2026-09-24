@@ -1,3 +1,7 @@
+### BetterAngle Pro v6.0.6
+- **Fix: Updates pointed at the old `wavedropmaps-org` repo**. The updater, installer and README now use `github.com/wavedropmaps/BetterAngle`.
+- **Fix: Stable channel gate was inverted**. Stable users are now only notified once `MIN_STABLE_VERSION` is raised to the new release; builds pushed above it stay quiet on the stable channel until then (beta users still see everything). `MIN_STABLE_VERSION` is set to 6.0.6 so this release reaches stable users.
+
 ### BetterAngle Pro v6.0.5
 - **New: Choose how dive/glide transitions are handled** (General tab). *Block input* is the existing behaviour: input is frozen for ~0.7s so the angle stays exact, but a key released during the freeze can stick (ghost walking). *Blend (no lock)* never touches your input; the angle eases between glide and dive turn speed instead, with an adjustable blend duration. If you move the mouse mid-transition the HUD shows "~ ESTIMATED ANGLE" until you reset. See `docs/INPUT_LOCK.md`.
 - **Fix: Angle could slowly drift**. The detector thread re-baked the angle ~250 times a second while the input thread was adding mouse movement, so counts could be dropped and a "zero" could be overwritten. The angle is now integrated per movement under a lock.
