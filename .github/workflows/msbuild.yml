@@ -22,14 +22,22 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.author.name != 'github-actions[bot]'
         shell: pwsh
         run: |
-          ./scripts/bump_version.ps1
-          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
+          # If this push changed VERSION itself (e.g. a deliberate jump to
+          # 7.0.0), release exactly that version. Otherwise bump the patch.
+          $changed = git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>$null
+          if ($changed -contains 'VERSION') {
+            Write-Host "VERSION was set explicitly in this push - releasing it as-is"
+          } else {
+            ./scripts/bump_version.ps1
+            $bumped = (Get-Content VERSION).Trim()
+            git add VERSION CMakeLists.txt include/shared/State.h RELEASE_NOTES.md
+            git commit -m "chore: auto-increment version to $bumped [skip ci]"
+          }
+
           $newVersion = (Get-Content VERSION).Trim()
-          git add VERSION CMakeLists.txt include/shared/State.h RELEASE_NOTES.md
-          git commit -m "chore: auto-increment version to $newVersion [skip ci]"
           git tag "v$newVersion"
           git push origin main --tags
           
@@ -102,6 +110,15 @@ jobs:
           }
           echo "RELEASE_NAME=BetterAngle Pro $env:RELEASE_TAG" >> $env:GITHUB_ENV
 
+          # Anything above MIN_STABLE_VERSION is a test build: publish it as a
+          # pre-release (beta channel only). Raise MIN_STABLE_VERSION to the
+          # release's version to ship it as a full stable release.
+          $relVer = $env:RELEASE_TAG.TrimStart('v')
+          $minStable = (Get-Content MIN_STABLE_VERSION).Trim()
+          $isPre = ([version]$relVer) -gt ([version]$minStable)
+          echo "PRERELEASE=$($isPre.ToString().ToLower())" >> $env:GITHUB_ENV
+          Write-Host "Release $relVer vs MIN_STABLE_VERSION $minStable -> prerelease=$isPre"
+
       - name: Create GitHub Release
         if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v1
@@ -110,7 +127,7 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_NAME }}
           body_path: CURRENT_RELEASE_NOTES.md
-          prerelease: false
+          prerelease: ${{ env.PRERELEASE == 'true' }}
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

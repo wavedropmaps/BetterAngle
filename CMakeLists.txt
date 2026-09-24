@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(BetterAngle VERSION 6.0.6 LANGUAGES CXX)
+project(BetterAngle VERSION 7.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,9 @@ target_include_directories(BetterAngle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 # Without /utf-8 MSVC reads them in the system codepage and garbles them.
 if(MSVC)
   target_compile_options(BetterAngle PRIVATE /utf-8)
+  # Qt 6.5 + the VS 2026 STL: see include/compat/msvc_stdext.h
+  target_compile_options(BetterAngle PRIVATE
+    "/FI${CMAKE_CURRENT_SOURCE_DIR}/include/compat/msvc_stdext.h")
 endif()
 
 # Release creation is handled by GitHub Actions workflow, not POST_BUILD

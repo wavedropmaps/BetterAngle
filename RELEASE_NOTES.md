@@ -1,8 +1,8 @@
-### BetterAngle Pro v6.0.6
-_v6.0.5 was never released (its build failed when GitHub's Windows runners moved to Visual Studio 2026), so this release includes everything below._
-- **Fix: Release build**. CI now builds with Ninja so it works with the runner's current Visual Studio.
+### BetterAngle Pro v7.0.0
+_Test build (pre-release): only offered to the beta update channel. v6.0.5 was never released (its build failed when GitHub's Windows runners moved to Visual Studio 2026), so this release includes everything below._
+- **Fix: Release build**. CI now builds with Ninja and a small compatibility shim so Qt 6.5 builds with the runner's Visual Studio 2026. A version set by hand in `VERSION` is now released as-is, and any version above `MIN_STABLE_VERSION` is published as a pre-release.
 - **Fix: Updates pointed at the old `wavedropmaps-org` repo**. The updater, installer and README now use `github.com/wavedropmaps/BetterAngle`.
-- **Fix: Stable channel gate was inverted**. Stable users are now only notified once `MIN_STABLE_VERSION` is raised to the new release; builds pushed above it stay quiet on the stable channel until then (beta users still see everything). `MIN_STABLE_VERSION` is set to 6.0.6 so this release reaches stable users.
+- **Fix: Stable channel gate was inverted**. Stable users are now only notified once `MIN_STABLE_VERSION` is raised to the new release; builds pushed above it stay quiet on the stable channel until then (beta users still see everything).
 - **New: Choose how dive/glide transitions are handled** (General tab). *Block input* is the existing behaviour: input is frozen for ~0.7s so the angle stays exact, but a key released during the freeze can stick (ghost walking). *Blend (no lock)* never touches your input; the angle eases between glide and dive turn speed instead, with an adjustable blend duration. If you move the mouse mid-transition the HUD shows "~ ESTIMATED ANGLE" until you reset. See `docs/INPUT_LOCK.md`.
 - **Fix: Angle could slowly drift**. The detector thread re-baked the angle ~250 times a second while the input thread was adding mouse movement, so counts could be dropped and a "zero" could be overwritten. The angle is now integrated per movement under a lock.
 - **Fix: Input lock fired with no ROI set**. With no detection area selected, the app treated you as diving from launch, froze input for 700ms at startup and used the dive turn speed until an area was picked.
