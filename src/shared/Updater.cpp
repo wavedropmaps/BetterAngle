@@ -229,10 +229,10 @@ bool CheckForUpdates() {
             minStableRaw.back() == ' '))
       minStableRaw.pop_back();
 
-    // Stable users are only told about a release once MIN_STABLE_VERSION has
-    // been raised to (at least) it. Test builds pushed above that number stay
-    // quiet on the stable channel until the file is bumped.
-    if (!minStableRaw.empty() && CompareVersions(latestTag, minStableRaw) > 0) {
+    // MIN_STABLE_VERSION is a floor: stable users are only told about
+    // releases at or above it. Normal releases are always above it, so they
+    // reach everyone; raise it to hold back an older line.
+    if (!minStableRaw.empty() && CompareVersions(latestTag, minStableRaw) < 0) {
       g_updateAvailable = false;
       SetUpdateHistory("You're up to date (stable channel).");
       g_hasCheckedForUpdates = true;

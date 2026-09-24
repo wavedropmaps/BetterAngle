@@ -110,15 +110,6 @@ jobs:
           }
           echo "RELEASE_NAME=BetterAngle Pro $env:RELEASE_TAG" >> $env:GITHUB_ENV
 
-          # Anything above MIN_STABLE_VERSION is a test build: publish it as a
-          # pre-release (beta channel only). Raise MIN_STABLE_VERSION to the
-          # release's version to ship it as a full stable release.
-          $relVer = $env:RELEASE_TAG.TrimStart('v')
-          $minStable = (Get-Content MIN_STABLE_VERSION).Trim()
-          $isPre = ([version]$relVer) -gt ([version]$minStable)
-          echo "PRERELEASE=$($isPre.ToString().ToLower())" >> $env:GITHUB_ENV
-          Write-Host "Release $relVer vs MIN_STABLE_VERSION $minStable -> prerelease=$isPre"
-
       - name: Create GitHub Release
         if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v1
@@ -127,7 +118,7 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_NAME }}
           body_path: CURRENT_RELEASE_NOTES.md
-          prerelease: ${{ env.PRERELEASE == 'true' }}
+          prerelease: false
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

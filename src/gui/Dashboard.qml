@@ -1221,7 +1221,7 @@ Item {
                         Hint {
                             text: backend.betaUpdates
                                   ? "Shows every release including pre-releases. You may get unstable builds."
-                                  : "Only offers releases graduated to stable via MIN_STABLE_VERSION."
+                                  : "Only offers full releases (no pre-releases)."
                         }
                     }
                 }
