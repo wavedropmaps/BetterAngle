@@ -49,7 +49,11 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+          # Ninja + the MSVC environment from msvc-dev-cmd works with whichever
+          # Visual Studio the runner image ships (hard-coding "Visual Studio 17
+          # 2022" broke when windows-latest moved to VS 2026). Output goes to
+          # build/Release so the deploy and installer steps are unchanged.
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${{ github.workspace }}/build/Release"
 
       - name: Build BetterAngle
         shell: pwsh
