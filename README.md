@@ -27,10 +27,10 @@ A high-performance, low-latency angle tracker and FOV detection overlay for Wind
 - **we are not responsible for any bans or consequences**
 
 ## 📦 Download
-Check the **[Releases](https://github.com/wavedropmaps-org/BetterAngle/releases)** page for the latest `BetterAngle.exe`.
+Check the **[Releases](https://github.com/wavedropmaps/BetterAngle/releases)** page for the latest `BetterAngle.exe`.
 
 ## ⚙️ Development
-1. Clone the repository: `git clone https://github.com/wavedropmaps-org/BetterAngle.git`
+1. Clone the repository: `git clone https://github.com/wavedropmaps/BetterAngle.git`
 2. Install Visual Studio 2022 (MSVC) and Qt 6.5.3 (`win64_msvc2019_64`).
 3. Configure and build with CMake:
    ```

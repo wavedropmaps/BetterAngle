@@ -10,13 +10,13 @@
 #pragma comment(lib, "wininet.lib")
 
 const wchar_t *VERSION_URL =
-    L"https://api.github.com/repos/wavedropmaps-org/BetterAngle/releases/latest";
+    L"https://api.github.com/repos/wavedropmaps/BetterAngle/releases/latest";
 // Beta: /releases list sorted newest-first, includes pre-releases
 const wchar_t *RELEASES_LIST_URL =
-    L"https://api.github.com/repos/wavedropmaps-org/BetterAngle/releases?per_page=1";
+    L"https://api.github.com/repos/wavedropmaps/BetterAngle/releases?per_page=1";
 const wchar_t *MIN_STABLE_URL =
-    L"https://raw.githubusercontent.com/wavedropmaps-org/BetterAngle/main/MIN_STABLE_VERSION";
-const wchar_t *DOWNLOAD_URL = L"https://github.com/wavedropmaps-org/BetterAngle/"
+    L"https://raw.githubusercontent.com/wavedropmaps/BetterAngle/main/MIN_STABLE_VERSION";
+const wchar_t *DOWNLOAD_URL = L"https://github.com/wavedropmaps/BetterAngle/"
                               L"releases/latest/download/BetterAngle_Setup.exe";
 
 static DWORD HttpStatus(HINTERNET hUrl) {
@@ -229,8 +229,10 @@ bool CheckForUpdates() {
             minStableRaw.back() == ' '))
       minStableRaw.pop_back();
 
-    if (!minStableRaw.empty() && CompareVersions(latestTag, minStableRaw) < 0) {
-      // Latest release hasn't been graduated yet — stay quiet.
+    // Stable users are only told about a release once MIN_STABLE_VERSION has
+    // been raised to (at least) it. Test builds pushed above that number stay
+    // quiet on the stable channel until the file is bumped.
+    if (!minStableRaw.empty() && CompareVersions(latestTag, minStableRaw) > 0) {
       g_updateAvailable = false;
       SetUpdateHistory("You're up to date (stable channel).");
       g_hasCheckedForUpdates = true;
@@ -292,7 +294,7 @@ void ApplyUpdateAndRestart() {
 
   auto openReleasePage = []() {
     ShellExecuteW(NULL, L"open",
-                  L"https://github.com/wavedropmaps-org/BetterAngle/releases", NULL,
+                  L"https://github.com/wavedropmaps/BetterAngle/releases", NULL,
                   NULL, SW_SHOWNORMAL);
   };
 
