@@ -1,13 +1,428 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
 
 Item {
     id: root
 
+    // ── Shared building blocks ──────────────────────────────────────────
+    // Inline components keep every tab on the same look without repeating
+    // 30 lines of styling per control. Colours are literal on purpose:
+    // inline components can't see ids from this file.
+
+    component SectionHeader: Text {
+        color: "#6a6a82"
+        font.pixelSize: 11
+        font.bold: true
+        font.letterSpacing: 1
+    }
+
+    component Hint: Text {
+        width: parent ? parent.width : 0
+        color: "#7a7a90"
+        font.pixelSize: 11
+        wrapMode: Text.WordWrap
+    }
+
+    // Rounded panel that stacks its children vertically.
+    component Card: Rectangle {
+        default property alias content: cardColumn.data
+        property alias spacing: cardColumn.spacing
+        width: parent ? parent.width : 0
+        height: cardColumn.implicitHeight + 28
+        radius: 8
+        color: "#14141d"
+        border.color: "#24243a"
+        border.width: 1
+        Column {
+            id: cardColumn
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 14 }
+            spacing: 10
+        }
+    }
+
+    component ActionButton: Button {
+        id: btn
+        property color baseColor: "#2a2a3e"
+        property color hoverColor: Qt.lighter(baseColor, 1.25)
+        property color borderColor: "transparent"
+        implicitHeight: 36
+        font.bold: true
+        font.pixelSize: 12
+        contentItem: Text {
+            text: btn.text
+            font: btn.font
+            color: "white"
+            opacity: btn.enabled ? 1.0 : 0.45
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+        background: Rectangle {
+            radius: 6
+            color: btn.down ? Qt.darker(btn.baseColor, 1.2)
+                            : (btn.hovered ? btn.hoverColor : btn.baseColor)
+            border.color: btn.visualFocus ? "#00ffcc" : btn.borderColor
+            border.width: 1
+            opacity: btn.enabled ? 1.0 : 0.5
+        }
+    }
+
+    component DarkField: TextField {
+        id: fld
+        implicitHeight: 34
+        color: "white"
+        selectionColor: "#00cca3"
+        placeholderTextColor: "#5a5a70"
+        font.pixelSize: 13
+        leftPadding: 10
+        background: Rectangle {
+            radius: 6
+            color: "#1b1b2a"
+            border.color: fld.activeFocus ? "#00cca3" : "#2e2e46"
+            border.width: fld.activeFocus ? 2 : 1
+        }
+    }
+
+    component DarkCombo: ComboBox {
+        id: combo
+        implicitHeight: 34
+        font.pixelSize: 13
+        contentItem: Text {
+            leftPadding: 10
+            rightPadding: combo.indicator.width + 6
+            text: combo.displayText
+            font: combo.font
+            color: "white"
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+        indicator: Text {
+            x: combo.width - width - 12
+            y: (combo.height - height) / 2
+            text: "▾"
+            color: "#8a8aa0"
+            font.pixelSize: 12
+        }
+        background: Rectangle {
+            radius: 6
+            color: combo.hovered ? "#20203a" : "#1b1b2a"
+            border.color: combo.activeFocus || combo.popup.visible ? "#00cca3" : "#2e2e46"
+            border.width: 1
+        }
+        delegate: ItemDelegate {
+            width: combo.width
+            highlighted: combo.highlightedIndex === index
+            contentItem: Text {
+                text: modelData
+                color: "white"
+                font.pixelSize: 13
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle { color: highlighted ? "#2a2a45" : "#1b1b2a" }
+        }
+        popup: Popup {
+            y: combo.height + 2
+            width: combo.width
+            implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
+            padding: 1
+            contentItem: ListView {
+                clip: true
+                implicitHeight: contentHeight
+                model: combo.popup.visible ? combo.delegateModel : null
+                currentIndex: combo.highlightedIndex
+                ScrollIndicator.vertical: ScrollIndicator {}
+            }
+            background: Rectangle { color: "#1b1b2a"; radius: 6; border.color: "#2e2e46" }
+        }
+    }
+
+    component DarkSlider: Slider {
+        id: sl
+        implicitHeight: 28
+        background: Rectangle {
+            x: sl.leftPadding
+            y: sl.topPadding + sl.availableHeight / 2 - height / 2
+            width: sl.availableWidth
+            height: 4
+            radius: 2
+            color: "#2e2e46"
+            Rectangle {
+                width: sl.visualPosition * parent.width
+                height: parent.height
+                radius: 2
+                color: "#00cca3"
+            }
+        }
+        handle: Rectangle {
+            x: sl.leftPadding + sl.visualPosition * (sl.availableWidth - width)
+            y: sl.topPadding + sl.availableHeight / 2 - height / 2
+            width: 16; height: 16; radius: 8
+            color: sl.pressed ? "#00ffcc" : "#e8e8f0"
+            border.color: "#00cca3"
+            border.width: 2
+        }
+    }
+
+    component DarkSwitch: Switch {
+        id: sw
+        indicator: Rectangle {
+            implicitWidth: 38; implicitHeight: 20
+            x: sw.leftPadding
+            y: (sw.height - height) / 2
+            radius: 10
+            color: sw.checked ? "#00a382" : "#2e2e46"
+            border.color: sw.checked ? "#00cca3" : "#3a3a55"
+            Rectangle {
+                x: sw.checked ? parent.width - width - 3 : 3
+                y: 3
+                width: 14; height: 14; radius: 7
+                color: "white"
+                Behavior on x { NumberAnimation { duration: 120 } }
+            }
+        }
+        contentItem: Text {
+            leftPadding: sw.indicator.width + 10
+            text: sw.text
+            color: "#e8e8f0"
+            font.pixelSize: 13
+            verticalAlignment: Text.AlignVCenter
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    // Label on the left, value on the right (Debug tab).
+    component StatRow: RowLayout {
+        property string label
+        property string value
+        property color valueColor: "#e8e8f0"
+        width: parent ? parent.width : 0
+        Text { text: parent.label; color: "#9a9ab0"; font.pixelSize: 12; Layout.fillWidth: true }
+        Text { text: parent.value; color: parent.valueColor; font.bold: true; font.pixelSize: 12 }
+    }
+
+    // Selectable option card for a two-way choice (transition input mode).
+    component OptionCard: Rectangle {
+        id: opt
+        property bool selected: false
+        property string title
+        property string subtitle
+        property string body
+        signal clicked()
+        width: parent ? parent.width : 0
+        height: optCol.implicitHeight + 20
+        radius: 8
+        color: selected ? "#10261f" : (optMouse.containsMouse ? "#191926" : "#14141d")
+        border.color: selected ? "#00cca3" : "#2e2e46"
+        border.width: selected ? 2 : 1
+        Column {
+            id: optCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10; leftMargin: 34 }
+            spacing: 3
+            Text { text: opt.title; color: "white"; font.bold: true; font.pixelSize: 13 }
+            Text { text: opt.subtitle; color: opt.selected ? "#00ffcc" : "#8a8aa0"; font.pixelSize: 11; font.bold: true }
+            Text { text: opt.body; color: "#9a9ab0"; font.pixelSize: 11; width: parent.width; wrapMode: Text.WordWrap }
+        }
+        // Radio dot
+        Rectangle {
+            x: 11; y: 12
+            width: 14; height: 14; radius: 7
+            color: "transparent"
+            border.color: opt.selected ? "#00cca3" : "#5a5a70"
+            border.width: 2
+            Rectangle {
+                anchors.centerIn: parent
+                width: 6; height: 6; radius: 3
+                color: "#00ffcc"
+                visible: opt.selected
+            }
+        }
+        MouseArea {
+            id: optMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: opt.clicked()
+        }
+    }
+
+    // Diagnostic kill-switch with a description (Debug tab).
+    component DiagToggle: Rectangle {
+        id: diag
+        property bool checked: false
+        property string onText
+        property string offText
+        property string description
+        signal toggled(bool value)
+        width: parent ? parent.width : 0
+        height: diagCol.implicitHeight + 16
+        radius: 6
+        color: checked ? "#2a1010" : "#101a14"
+        border.color: checked ? "#ff4444" : "#224433"
+        border.width: 1
+        Column {
+            id: diagCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 8 }
+            spacing: 2
+            DarkSwitch {
+                checked: diag.checked
+                text: diag.checked ? diag.onText : diag.offText
+                onToggled: diag.toggled(checked)
+            }
+            Text {
+                text: diag.description
+                color: "#7a7a90"; font.pixelSize: 10
+                width: parent.width; wrapMode: Text.WordWrap
+            }
+        }
+    }
+
+    // One hotkey binding: click the field, then press a key combo or mouse
+    // button. Emits bound(text) with e.g. "Ctrl + U" or "Mouse4".
+    component HotkeyRow: RowLayout {
+        id: hk
+        property string label
+        property string value
+        signal bound(string bind)
+        width: parent ? parent.width : 0
+        spacing: 10
+
+        function modifierParts(mods) {
+            var parts = []
+            if (mods & Qt.ControlModifier) parts.push("Ctrl")
+            if (mods & Qt.ShiftModifier) parts.push("Shift")
+            if (mods & Qt.AltModifier) parts.push("Alt")
+            if (mods & Qt.MetaModifier) parts.push("Win")
+            return parts
+        }
+
+        function keyName(event) {
+            var k = event.key
+            var keypad = (event.modifiers & Qt.KeypadModifier)
+            if (k >= Qt.Key_F1 && k <= Qt.Key_F12) return "F" + (k - Qt.Key_F1 + 1)
+            if (keypad && k >= Qt.Key_0 && k <= Qt.Key_9) return "Numpad" + String.fromCharCode(k)
+            if (keypad && k === Qt.Key_Plus) return "Add"
+            if (keypad && k === Qt.Key_Minus) return "Subtract"
+            if (keypad && k === Qt.Key_Asterisk) return "Multiply"
+            if (keypad && k === Qt.Key_Slash) return "Divide"
+            if (keypad && (k === Qt.Key_Period || k === Qt.Key_Comma)) return "Decimal"
+            var named = {}
+            named[Qt.Key_Space] = "Space"; named[Qt.Key_Tab] = "Tab"
+            named[Qt.Key_Return] = "Enter"; named[Qt.Key_Enter] = "Enter"
+            named[Qt.Key_Backspace] = "Backspace"; named[Qt.Key_Insert] = "Insert"
+            named[Qt.Key_Delete] = "Delete"; named[Qt.Key_Home] = "Home"
+            named[Qt.Key_End] = "End"; named[Qt.Key_PageUp] = "PageUp"
+            named[Qt.Key_PageDown] = "PageDown"; named[Qt.Key_Up] = "Up"
+            named[Qt.Key_Down] = "Down"; named[Qt.Key_Left] = "Left"
+            named[Qt.Key_Right] = "Right"; named[Qt.Key_CapsLock] = "CapsLock"
+            named[Qt.Key_NumLock] = "NumLock"; named[Qt.Key_ScrollLock] = "ScrollLock"
+            named[Qt.Key_Print] = "PrintScreen"; named[Qt.Key_Pause] = "Pause"
+            if (named[k] !== undefined) return named[k]
+            if ((k >= Qt.Key_A && k <= Qt.Key_Z) || (k >= Qt.Key_0 && k <= Qt.Key_9))
+                return String.fromCharCode(k)
+            return ""
+        }
+
+        function mouseName(button) {
+            if (button === Qt.LeftButton) return "Mouse1"
+            if (button === Qt.RightButton) return "Mouse2"
+            if (button === Qt.MiddleButton) return "Mouse3"
+            if (button === Qt.BackButton) return "Mouse4"
+            if (button === Qt.ForwardButton) return "Mouse5"
+            return ""
+        }
+
+        function commit(parts) {
+            hk.bound(parts.join(" + "))
+            backend.saveKeybinds()
+            field.focus = false
+        }
+
+        Text {
+            text: hk.label
+            color: "#c8c8d4"
+            font.pixelSize: 12
+            Layout.preferredWidth: 130
+        }
+        DarkField {
+            id: field
+            Layout.fillWidth: true
+            readOnly: true
+            selectByMouse: false
+            activeFocusOnTab: true
+            text: activeFocus ? "Press a key or mouse button…" : hk.value
+            color: activeFocus ? "#00ffcc" : "white"
+            font.bold: activeFocus
+
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.AllButtons
+                cursorShape: Qt.PointingHandCursor
+                onPressed: function(mouse) {
+                    if (!field.activeFocus) {
+                        field.forceActiveFocus()
+                        return
+                    }
+                    var name = hk.mouseName(mouse.button)
+                    if (name === "") return
+                    var parts = hk.modifierParts(mouse.modifiers)
+                    parts.push(name)
+                    hk.commit(parts)
+                }
+            }
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+                event.accepted = true
+                if (event.key === Qt.Key_Escape) {
+                    field.focus = false
+                    return
+                }
+                if (event.key === Qt.Key_Control || event.key === Qt.Key_Shift ||
+                    event.key === Qt.Key_Alt || event.key === Qt.Key_Meta)
+                    return
+                var name = hk.keyName(event)
+                if (name === "") return
+                var parts = hk.modifierParts(event.modifiers)
+                parts.push(name)
+                hk.commit(parts)
+            }
+            onActiveFocusChanged: {
+                if (activeFocus) backend.startKeybindAssignment()
+                else backend.endKeybindAssignment()
+            }
+        }
+    }
+
+    component TabBtn: TabButton {
+        id: tb
+        contentItem: Text {
+            text: tb.text
+            color: tb.checked ? "#00ffcc" : (tb.hovered ? "#c8c8d4" : "#7a7a90")
+            font.bold: true
+            font.pixelSize: 12
+            font.letterSpacing: 1
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+        background: Rectangle {
+            color: tb.checked ? "#16162a" : "transparent"
+            Rectangle {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 2
+                color: "#00ffcc"
+                visible: tb.checked
+            }
+        }
+    }
+
+    // ── Layout ──────────────────────────────────────────────────────────
+
+    // Debug values are polled, not pushed. 10 Hz is plenty for a readout and
+    // only runs while the Debug tab is open.
     Timer {
-        interval: 10
-        running: bar.currentIndex === 3 // Debug tab index
+        interval: 100
+        running: bar.currentIndex === 3
         repeat: true
         onTriggered: backend.refreshDebugData()
     }
@@ -17,33 +432,13 @@ Item {
         width: parent.width
         background: Rectangle { color: "#0d0d12" }
         onCurrentIndexChanged: {
-            if (currentIndex == 2) { // UPDATES tab
-                if (!backend.hasCheckedForUpdates) {
-                    backend.checkForUpdates()
-                }
-            }
+            if (currentIndex === 2 && !backend.hasCheckedForUpdates)
+                backend.checkForUpdates()
         }
-        
-        TabButton {
-            text: qsTr("GENERAL")
-            contentItem: Text { text: parent.text; color: parent.checked ? "#00ffcc" : "#888"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            background: Rectangle { color: parent.checked ? "#1a1a2e" : "transparent" }
-        }
-        TabButton {
-            text: qsTr("CROSSHAIR")
-            contentItem: Text { text: parent.text; color: parent.checked ? "#00ffcc" : "#888"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            background: Rectangle { color: parent.checked ? "#1a1a2e" : "transparent" }
-        }
-        TabButton {
-            text: qsTr("UPDATES")
-            contentItem: Text { text: parent.text; color: parent.checked ? "#00ffcc" : "#888"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            background: Rectangle { color: parent.checked ? "#1a1a2e" : "transparent" }
-        }
-        TabButton {
-            text: qsTr("DEBUG")
-            contentItem: Text { text: parent.text; color: parent.checked ? "#00ffcc" : "#888"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            background: Rectangle { color: parent.checked ? "#1a1a2e" : "transparent" }
-        }
+        TabBtn { text: qsTr("GENERAL") }
+        TabBtn { text: qsTr("CROSSHAIR") }
+        TabBtn { text: qsTr("UPDATES") }
+        TabBtn { text: qsTr("DEBUG") }
     }
 
     StackLayout {
@@ -57,556 +452,213 @@ Item {
             color: "#0d0d12"
             Flickable {
                 anchors.fill: parent
-                contentHeight: genCol.implicitHeight + 40
+                contentHeight: genCol.implicitHeight + 32
                 clip: true
+                ScrollBar.vertical: ScrollBar {}
                 Column {
                     id: genCol
-                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
-                    spacing: 14
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
+                    spacing: 12
 
-                    Text { text: "MANUAL SENSITIVITY"; color: "#666"; font.pixelSize: 11; font.bold: true }
-
-                    Button {
-                        text: "RESET ANGLE TO 0"
-                        width: parent.width
-                        height: 44
-                        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        background: Rectangle { 
-                            color: parent.hovered ? "#00cca3" : "#00a382"
-                            radius: 4 
-                            border.color: "#00ffa3"
-                            border.width: 1
-                        }
-                        onClicked: backend.setZero()
-                    }
-
-                    // Sens X
-                    Column {
-                        spacing: 4
-                        width: parent.width
-                        Text { text: "Fortnite Sens X"; color: "#aaa"; font.pixelSize: 12 }
-                        TextField {
-                            id: sensXField
+                    // Angle
+                    Card {
+                        SectionHeader { text: "ANGLE" }
+                        ActionButton {
+                            text: "RESET ANGLE TO 0"
                             width: parent.width
-                            // Re-read when profile changes so value always shows on startup
-                            text: backend.sensX.toFixed(1)
-                            color: "white"
-                            background: Rectangle { color: "#1c1c2e"; radius: 4; border.color: "#333"; border.width: 1 }
-                            onEditingFinished: backend.sensX = Number(parseFloat(text).toFixed(1))
-                            Connections {
-                                target: backend
-                                onProfileChanged: sensXField.text = backend.sensX.toFixed(1)
+                            implicitHeight: 42
+                            baseColor: "#00a382"
+                            hoverColor: "#00cca3"
+                            borderColor: "#00ffa3"
+                            onClicked: backend.setZero()
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: 10
+                            Column {
+                                width: (parent.width - 10) / 2
+                                spacing: 4
+                                Text { text: "Fortnite Sens X"; color: "#9a9ab0"; font.pixelSize: 12 }
+                                DarkField {
+                                    id: sensXField
+                                    width: parent.width
+                                    text: backend.sensX.toFixed(1)
+                                    onEditingFinished: {
+                                        var v = parseFloat(text.replace(",", "."))
+                                        if (!isNaN(v) && v > 0) backend.sensX = Number(v.toFixed(1))
+                                        else text = backend.sensX.toFixed(1)
+                                    }
+                                }
+                            }
+                            Column {
+                                width: (parent.width - 10) / 2
+                                spacing: 4
+                                Text { text: "Fortnite Sens Y"; color: "#9a9ab0"; font.pixelSize: 12 }
+                                DarkField {
+                                    id: sensYField
+                                    width: parent.width
+                                    text: backend.sensY.toFixed(1)
+                                    onEditingFinished: {
+                                        var v = parseFloat(text.replace(",", "."))
+                                        if (!isNaN(v) && v > 0) backend.sensY = Number(v.toFixed(1))
+                                        else text = backend.sensY.toFixed(1)
+                                    }
+                                }
+                            }
+                        }
+                        Connections {
+                            target: backend
+                            // Re-read so the fields always show the loaded profile.
+                            function onProfileChanged() {
+                                sensXField.text = backend.sensX.toFixed(1)
+                                sensYField.text = backend.sensY.toFixed(1)
                             }
                         }
                     }
 
-                    // Sens Y
-                    Column {
-                        spacing: 4
-                        width: parent.width
-                        Text { text: "Fortnite Sens Y"; color: "#aaa"; font.pixelSize: 12 }
-                        TextField {
-                            id: sensYField
+                    // Transition input handling
+                    Card {
+                        SectionHeader { text: "DIVE / GLIDE TRANSITIONS" }
+                        Hint {
+                            text: "Fortnite changes turn speed for ~0.7s whenever you switch between diving and gliding. Choose how BetterAngle handles that window."
+                        }
+                        OptionCard {
+                            title: "Block input"
+                            subtitle: "EXACT ANGLE · CLASSIC"
+                            body: "Freezes mouse and keyboard during the change so nothing can move. The angle stays exact, but a key you let go of during the freeze can stay stuck (ghost walking)."
+                            selected: backend.inputLockMode === 0
+                            onClicked: backend.inputLockMode = 0
+                        }
+                        OptionCard {
+                            title: "Blend (no lock)"
+                            subtitle: "SMOOTH MOVEMENT · ESTIMATED DURING CHANGE"
+                            body: "Never touches your input, so movement always works. The angle eases between glide and dive speed instead. If you move the mouse mid-change the HUD shows “~ ESTIMATED” until you reset the angle."
+                            selected: backend.inputLockMode === 1
+                            onClicked: backend.inputLockMode = 1
+                        }
+                        Column {
                             width: parent.width
-                            text: backend.sensY.toFixed(1)
-                            color: "white"
-                            background: Rectangle { color: "#1c1c2e"; radius: 4; border.color: "#333"; border.width: 1 }
-                            onEditingFinished: backend.sensY = Number(parseFloat(text).toFixed(1))
-                            Connections {
-                                target: backend
-                                onProfileChanged: sensYField.text = backend.sensY.toFixed(1)
+                            spacing: 2
+                            visible: backend.inputLockMode === 1
+                            RowLayout {
+                                width: parent.width
+                                Text { text: "Blend duration"; color: "#c8c8d4"; font.pixelSize: 12; Layout.fillWidth: true }
+                                Text { text: backend.transitionBlendMs + " ms"; color: "#00ffcc"; font.bold: true; font.pixelSize: 12 }
                             }
+                            DarkSlider {
+                                width: parent.width
+                                from: 100; to: 2000; stepSize: 50
+                                value: backend.transitionBlendMs
+                                onMoved: backend.transitionBlendMs = Math.round(value)
+                            }
+                            Hint { text: "Match this to how long the camera takes to settle after a change. 700 ms suits most setups." }
                         }
                     }
 
-                    Text { text: "DISPLAY & MONITOR"; color: "#666"; font.pixelSize: 11; font.bold: true; topPadding: 10 }
-                    Column {
-                        spacing: 4
-                        width: parent.width
-                        Text { text: "Active Game Monitor"; color: "#aaa"; font.pixelSize: 12 }
-                        ComboBox {
+                    // Display
+                    Card {
+                        SectionHeader { text: "DISPLAY" }
+                        Text { text: "Game monitor"; color: "#9a9ab0"; font.pixelSize: 12 }
+                        DarkCombo {
                             id: monitorCombo
                             width: parent.width
                             model: backend.availableScreens
                             currentIndex: backend.screenIndex
-                            onActivated: backend.screenIndex = index
+                            onActivated: function(index) { backend.screenIndex = index }
                             Connections {
                                 target: backend
-                                onProfileChanged: monitorCombo.currentIndex = backend.screenIndex
-                            }
-                            contentItem: Text {
-                                text: monitorCombo.displayText
-                                color: "white"
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 10
-                            }
-                            background: Rectangle {
-                                color: "#1c1c2e"
-                                radius: 4
-                                border.color: "#333"
-                                border.width: 1
-                            }
-                            delegate: ItemDelegate {
-                                width: monitorCombo.width
-                                contentItem: Text {
-                                    text: modelData
-                                    color: "white"
-                                    font.pixelSize: 13
-                                    elide: Text.ElideRight
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: highlighted ? "#33334d" : "#1c1c2e"
-                                }
-                            }
-                            popup: Popup {
-                                y: parent.height
-                                width: parent.width
-                                implicitHeight: Math.min(contentItem.implicitHeight, 200)
-                                padding: 1
-                                contentItem: ListView {
-                                    clip: true
-                                    implicitHeight: contentHeight
-                                    model: monitorCombo.delegateModel
-                                    currentIndex: monitorCombo.highlightedIndex
-                                    ScrollIndicator.vertical: ScrollIndicator { }
-                                }
-                                background: Rectangle {
-                                    color: "#1c1c2e"
-                                    radius: 4
-                                    border.color: "#333"
-                                }
+                                function onProfileChanged() { monitorCombo.currentIndex = backend.screenIndex }
                             }
                         }
-                    }
-
-                    Button {
-                        text: "RESET HUD POSITION"
-                        width: parent.width
-                        height: 36
-                        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 12 }
-                        background: Rectangle {
-                            color: parent.hovered ? "#332233" : "#1e1228"
-                            radius: 4
-                            border.color: "#9944cc"
-                            border.width: 1
-                        }
-                        onClicked: backend.resetHudPosition()
-                    }
-
-                    Column {
-                        spacing: 4
-                        width: parent.width
-                        Text { text: "HUD Decimal Places"; color: "#aaa"; font.pixelSize: 12 }
-                        ComboBox {
+                        Text { text: "HUD decimal places"; color: "#9a9ab0"; font.pixelSize: 12 }
+                        DarkCombo {
                             id: decimalCombo
                             width: parent.width
-                            model: ["1 Decimal Place", "2 Decimal Places"]
+                            model: ["1 decimal place", "2 decimal places"]
                             currentIndex: backend.hudDecimalPlaces - 1
-                            onActivated: backend.hudDecimalPlaces = index + 1
+                            onActivated: function(index) { backend.hudDecimalPlaces = index + 1 }
                             Connections {
                                 target: backend
-                                onProfileChanged: decimalCombo.currentIndex = backend.hudDecimalPlaces - 1
-                            }
-                            contentItem: Text {
-                                text: decimalCombo.displayText
-                                color: "white"
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 10
-                            }
-                            background: Rectangle {
-                                color: "#1c1c2e"
-                                radius: 4
-                                border.color: "#333"
-                                border.width: 1
-                            }
-                            delegate: ItemDelegate {
-                                width: decimalCombo.width
-                                contentItem: Text {
-                                    text: modelData
-                                    color: "white"
-                                    font.pixelSize: 13
-                                    elide: Text.ElideRight
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: highlighted ? "#33334d" : "#1c1c2e"
-                                }
-                            }
-                            popup: Popup {
-                                y: parent.height
-                                width: parent.width
-                                implicitHeight: Math.min(contentItem.implicitHeight, 200)
-                                padding: 1
-                                contentItem: ListView {
-                                    clip: true
-                                    implicitHeight: contentHeight
-                                    model: decimalCombo.delegateModel
-                                    currentIndex: decimalCombo.highlightedIndex
-                                    ScrollIndicator.vertical: ScrollIndicator { }
-                                }
-                                background: Rectangle {
-                                    color: "#1c1c2e"
-                                    radius: 4
-                                    border.color: "#333"
-                                }
+                                function onProfileChanged() { decimalCombo.currentIndex = backend.hudDecimalPlaces - 1 }
                             }
                         }
-                    }
-
-                    Text { text: "TRIGGER CALIBRATION (%)"; color: "#666"; font.pixelSize: 12; topPadding: 10 }
-                    RowLayout {
-                        Text { text: "Dive to glide threshold match limit %"; color: "white"; Layout.preferredWidth: 230; font.pixelSize: 12 }
-                        Slider {
-                            Layout.fillWidth: true
-                            from: 1; to: 20; value: backend.diveGlideMatch
-                            onValueChanged: backend.diveGlideMatch = value
-                        }
-                        Text { text: Math.round(backend.diveGlideMatch).toString() + "%"; color: "#aaa" }
-                    }
-                    Text { 
-                        text: ""; 
-                        color: "#666"; font.pixelSize: 11; font.italic: true 
-                    }
-
-                    Text { text: "TARGET COLOR SETTINGS"; color: "#666"; font.pixelSize: 12; topPadding: 15 }
-                    RowLayout {
-                        spacing: 10
-                        Rectangle {
-                            width: 30; height: 30; radius: 4
-                            color: backend.targetColor
-                            border.color: "#333"; border.width: 1
-                        }
-                        ColumnLayout {
-                            Text { text: "Tolerance (color match ±)"; color: "white"; font.pixelSize: 12 }
-                            RowLayout {
-                                Slider {
-                                    Layout.fillWidth: true
-                                    from: 0; to: 120; value: backend.tolerance
-                                    onValueChanged: backend.tolerance = Math.round(value)
-                                }
-                                Text { text: backend.tolerance; color: "#aaa"; Layout.preferredWidth: 30 }
-                            }
-                        }
-                    }
-
-                    Text { text: "HOTKEY CONFIGURATION"; color: "#666"; font.pixelSize: 11; font.bold: true; topPadding: 10 }
-                    
-                    Column {
-                        id: hotkeyColumn
-                        spacing: 8
-                        width: parent.width
-
-                        function formatCapturedHotkey(event) {
-                            var parts = []
-                            if (event.modifiers & Qt.ControlModifier) parts.push("Ctrl")
-                            if (event.modifiers & Qt.ShiftModifier) parts.push("Shift")
-                            if (event.modifiers & Qt.AltModifier) parts.push("Alt")
-                            if (event.modifiers & Qt.MetaModifier) parts.push("Win")
-
-                            if (event.key === Qt.Key_Control || event.key === Qt.Key_Shift || event.key === Qt.Key_Alt || event.key === Qt.Key_Meta)
-                                return ""
-
-                            var key = ""
-                            if (event.key >= Qt.Key_F1 && event.key <= Qt.Key_F12)
-                                key = "F" + (event.key - Qt.Key_F1 + 1)
-                            else if ((event.modifiers & Qt.KeypadModifier) && event.key >= Qt.Key_0 && event.key <= Qt.Key_9)
-                                key = "Numpad" + String.fromCharCode(event.key)
-                            else if ((event.modifiers & Qt.KeypadModifier) && event.key === Qt.Key_Plus)
-                                key = "Add"
-                            else if ((event.modifiers & Qt.KeypadModifier) && event.key === Qt.Key_Minus)
-                                key = "Subtract"
-                            else if ((event.modifiers & Qt.KeypadModifier) && event.key === Qt.Key_Asterisk)
-                                key = "Multiply"
-                            else if ((event.modifiers & Qt.KeypadModifier) && event.key === Qt.Key_Slash)
-                                key = "Divide"
-                            else if ((event.modifiers & Qt.KeypadModifier) && (event.key === Qt.Key_Period || event.key === Qt.Key_Comma))
-                                key = "Decimal"
-                            else if (event.key === Qt.Key_Space)
-                                key = "Space"
-                            else if (event.key === Qt.Key_Tab)
-                                key = "Tab"
-                            else if (event.key === Qt.Key_Escape)
-                                key = "Esc"
-                            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                key = "Enter"
-                            else if (event.key === Qt.Key_Backspace)
-                                key = "Backspace"
-                            else if (event.key === Qt.Key_Insert)
-                                key = "Insert"
-                            else if (event.key === Qt.Key_Delete)
-                                key = "Delete"
-                            else if (event.key === Qt.Key_Home)
-                                key = "Home"
-                            else if (event.key === Qt.Key_End)
-                                key = "End"
-                            else if (event.key === Qt.Key_PageUp)
-                                key = "PageUp"
-                            else if (event.key === Qt.Key_PageDown)
-                                key = "PageDown"
-                            else if (event.key === Qt.Key_Up)
-                                key = "Up"
-                            else if (event.key === Qt.Key_Down)
-                                key = "Down"
-                            else if (event.key === Qt.Key_Left)
-                                key = "Left"
-                            else if (event.key === Qt.Key_Right)
-                                key = "Right"
-                            else if (event.key === Qt.Key_CapsLock)
-                                key = "CapsLock"
-                            else if (event.key === Qt.Key_NumLock)
-                                key = "NumLock"
-                            else if (event.key === Qt.Key_ScrollLock)
-                                key = "ScrollLock"
-                            else if (event.key === Qt.Key_Print)
-                                key = "PrintScreen"
-                            else if (event.key === Qt.Key_Pause)
-                                key = "Pause"
-                            else if (event.key >= Qt.Key_A && event.key <= Qt.Key_Z)
-                                key = String.fromCharCode(event.key)
-                            else if (event.key >= Qt.Key_0 && event.key <= Qt.Key_9)
-                                key = String.fromCharCode(event.key)
-
-                            if (key === "")
-                                return ""
-
-                            parts.push(key)
-                            return parts.join(" + ")
-                        }
-
-                        function formatCapturedMouseButton(mouse) {
-                            var parts = []
-                            if (mouse.modifiers & Qt.ControlModifier) parts.push("Ctrl")
-                            if (mouse.modifiers & Qt.ShiftModifier) parts.push("Shift")
-                            if (mouse.modifiers & Qt.AltModifier) parts.push("Alt")
-                            if (mouse.modifiers & Qt.MetaModifier) parts.push("Win")
-
-                            var button = ""
-                            if (mouse.button === Qt.LeftButton)
-                                button = "Mouse1"
-                            else if (mouse.button === Qt.RightButton)
-                                button = "Mouse2"
-                            else if (mouse.button === Qt.MiddleButton)
-                                button = "Mouse3"
-                            else if (mouse.button === Qt.BackButton)
-                                button = "Mouse4"
-                            else if (mouse.button === Qt.ForwardButton)
-                                button = "Mouse5"
-
-                            if (button === "")
-                                return ""
-
-                            parts.push(button)
-                            return parts.join(" + ")
-                        }
-
-                        function captureHotkey(event, applyBinding) {
-                            if (event.key === Qt.Key_Escape) {
-                                root.forceActiveFocus()
-                                event.accepted = true
-                                return
-                            }
-
-                            var bind = formatCapturedHotkey(event)
-                            if (bind === "") {
-                                event.accepted = true
-                                return
-                            }
-
-                            applyBinding(bind)
-                            backend.saveKeybinds()
-                            root.forceActiveFocus()
-                            event.accepted = true
-                        }
-
-                        function captureMouseHotkey(mouse, applyBinding) {
-                            var bind = formatCapturedMouseButton(mouse)
-                            if (bind === "")
-                                return
-
-                            applyBinding(bind)
-                            backend.saveKeybinds()
-                            root.forceActiveFocus()
-                        }
-                        
-                        RowLayout {
-                            Text { text: "Toggle Dashboard:"; color: "white"; Layout.preferredWidth: 150 }
-                            TextField {
-                                id: keyToggleField
-                                Layout.fillWidth: true
-                                readOnly: true
-                                selectByMouse: false
-                                activeFocusOnTab: true
-                                text: activeFocus ? "Listening for keys..." : backend.keyToggle
-                                color: activeFocus ? "#00ffa3" : "white"
-                                font.bold: activeFocus
-                                background: Rectangle { 
-                                    color: "#1c1c2e"; radius: 4 
-                                    border.color: keyToggleField.activeFocus ? "#00cca3" : "#333"
-                                    border.width: keyToggleField.activeFocus ? 2 : 1 
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    acceptedButtons: Qt.AllButtons
-                                    cursorShape: Qt.PointingHandCursor
-                                    onPressed: function(mouse) {
-                                        if (keyToggleField.activeFocus)
-                                            hotkeyColumn.captureMouseHotkey(mouse, function(bind) { backend.keyToggle = bind })
-                                        else
-                                            keyToggleField.forceActiveFocus()
-                                    }
-                                }
-                                Keys.priority: Keys.BeforeItem
-                                Keys.onPressed: function(event) {
-                                    hotkeyColumn.captureHotkey(event, function(bind) { backend.keyToggle = bind })
-                                }
-                                onActiveFocusChanged: {
-                                    if (activeFocus) {
-                                        backend.startKeybindAssignment()
-                                    } else {
-                                        backend.endKeybindAssignment()
-                                    }
-                                }
-                            }
-                        }
-                        RowLayout {
-                            Text { text: "Selection Overlay:"; color: "white"; Layout.preferredWidth: 150 }
-                            TextField {
-                                id: keyRoiField
-                                Layout.fillWidth: true
-                                readOnly: true
-                                selectByMouse: false
-                                activeFocusOnTab: true
-                                text: activeFocus ? "Listening for keys..." : backend.keyRoi
-                                color: activeFocus ? "#00ffa3" : "white"
-                                font.bold: activeFocus
-                                background: Rectangle { 
-                                    color: "#1c1c2e"; radius: 4 
-                                    border.color: keyRoiField.activeFocus ? "#00cca3" : "#333"
-                                    border.width: keyRoiField.activeFocus ? 2 : 1 
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    acceptedButtons: Qt.AllButtons
-                                    cursorShape: Qt.PointingHandCursor
-                                    onPressed: function(mouse) {
-                                        if (keyRoiField.activeFocus)
-                                            hotkeyColumn.captureMouseHotkey(mouse, function(bind) { backend.keyRoi = bind })
-                                        else
-                                            keyRoiField.forceActiveFocus()
-                                    }
-                                }
-                                Keys.priority: Keys.BeforeItem
-                                Keys.onPressed: function(event) {
-                                    hotkeyColumn.captureHotkey(event, function(bind) { backend.keyRoi = bind })
-                                }
-                                onActiveFocusChanged: {
-                                    if (activeFocus) {
-                                        backend.startKeybindAssignment()
-                                    } else {
-                                        backend.endKeybindAssignment()
-                                    }
-                                }
-                            }
-                        }
-                        RowLayout {
-                            Text { text: "Toggle Crosshair:"; color: "white"; Layout.preferredWidth: 150 }
-                            TextField {
-                                id: keyCrossField
-                                Layout.fillWidth: true
-                                readOnly: true
-                                selectByMouse: false
-                                activeFocusOnTab: true
-                                text: activeFocus ? "Listening for keys..." : backend.keyCross
-                                color: activeFocus ? "#00ffa3" : "white"
-                                font.bold: activeFocus
-                                background: Rectangle { 
-                                    color: "#1c1c2e"; radius: 4 
-                                    border.color: keyCrossField.activeFocus ? "#00cca3" : "#333"
-                                    border.width: keyCrossField.activeFocus ? 2 : 1 
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    acceptedButtons: Qt.AllButtons
-                                    cursorShape: Qt.PointingHandCursor
-                                    onPressed: function(mouse) {
-                                        if (keyCrossField.activeFocus)
-                                            hotkeyColumn.captureMouseHotkey(mouse, function(bind) { backend.keyCross = bind })
-                                        else
-                                            keyCrossField.forceActiveFocus()
-                                    }
-                                }
-                                Keys.priority: Keys.BeforeItem
-                                Keys.onPressed: function(event) {
-                                    hotkeyColumn.captureHotkey(event, function(bind) { backend.keyCross = bind })
-                                }
-                                onActiveFocusChanged: {
-                                    if (activeFocus) {
-                                        backend.startKeybindAssignment()
-                                    } else {
-                                        backend.endKeybindAssignment()
-                                    }
-                                }
-                            }
-                        }
-                        RowLayout {
-                            Text { text: "Zero Counter:"; color: "white"; Layout.preferredWidth: 150 }
-                            TextField {
-                                id: keyZeroField
-                                Layout.fillWidth: true
-                                readOnly: true
-                                selectByMouse: false
-                                activeFocusOnTab: true
-                                text: activeFocus ? "Listening for keys..." : backend.keyZero
-                                color: activeFocus ? "#00ffa3" : "white"
-                                font.bold: activeFocus
-                                background: Rectangle { 
-                                    color: "#1c1c2e"; radius: 4 
-                                    border.color: keyZeroField.activeFocus ? "#00cca3" : "#333"
-                                    border.width: keyZeroField.activeFocus ? 2 : 1 
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    acceptedButtons: Qt.AllButtons
-                                    cursorShape: Qt.PointingHandCursor
-                                    onPressed: function(mouse) {
-                                        if (keyZeroField.activeFocus)
-                                            hotkeyColumn.captureMouseHotkey(mouse, function(bind) { backend.keyZero = bind })
-                                        else
-                                            keyZeroField.forceActiveFocus()
-                                    }
-                                }
-                                Keys.priority: Keys.BeforeItem
-                                Keys.onPressed: function(event) {
-                                    hotkeyColumn.captureHotkey(event, function(bind) { backend.keyZero = bind })
-                                }
-                                onActiveFocusChanged: {
-                                    if (activeFocus) {
-                                        backend.startKeybindAssignment()
-                                    } else {
-                                        backend.endKeybindAssignment()
-                                    }
-                                }
-                            }
-                        }
-
-
-                        Text {
-                            text: "Click a bind, then press the combo. Changes apply immediately."
-                            color: "#888"
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
+                        ActionButton {
+                            text: "RESET HUD POSITION"
                             width: parent.width
+                            baseColor: "#1e1228"
+                            hoverColor: "#332233"
+                            borderColor: "#9944cc"
+                            onClicked: backend.resetHudPosition()
                         }
                     }
 
+                    // Detection
+                    Card {
+                        SectionHeader { text: "DIVE DETECTION" }
+                        RowLayout {
+                            width: parent.width
+                            Text { text: "Match threshold"; color: "#c8c8d4"; font.pixelSize: 12; Layout.fillWidth: true }
+                            Text { text: Math.round(backend.diveGlideMatch) + "%"; color: "#00ffcc"; font.bold: true; font.pixelSize: 12 }
+                        }
+                        DarkSlider {
+                            width: parent.width
+                            from: 1; to: 20; stepSize: 1
+                            value: backend.diveGlideMatch
+                            onMoved: backend.diveGlideMatch = value
+                        }
+                        Hint { text: "Share of the selected area that must match the target colour to count as diving." }
 
-                    Button {
+                        RowLayout {
+                            width: parent.width
+                            spacing: 10
+                            Rectangle {
+                                width: 28; height: 28; radius: 6
+                                color: backend.targetColor
+                                border.color: "#3a3a55"; border.width: 1
+                            }
+                            Text { text: "Colour tolerance"; color: "#c8c8d4"; font.pixelSize: 12; Layout.fillWidth: true }
+                            Text { text: "±" + backend.tolerance; color: "#00ffcc"; font.bold: true; font.pixelSize: 12 }
+                        }
+                        DarkSlider {
+                            width: parent.width
+                            from: 0; to: 120; stepSize: 1
+                            value: backend.tolerance
+                            onMoved: backend.tolerance = Math.round(value)
+                        }
+                        Hint { text: "Set the area and colour in-game with the Selection Overlay hotkey." }
+                    }
+
+                    // Hotkeys
+                    Card {
+                        SectionHeader { text: "HOTKEYS" }
+                        HotkeyRow {
+                            label: "Toggle dashboard"
+                            value: backend.keyToggle
+                            onBound: function(bind) { backend.keyToggle = bind }
+                        }
+                        HotkeyRow {
+                            label: "Selection overlay"
+                            value: backend.keyRoi
+                            onBound: function(bind) { backend.keyRoi = bind }
+                        }
+                        HotkeyRow {
+                            label: "Toggle crosshair"
+                            value: backend.keyCross
+                            onBound: function(bind) { backend.keyCross = bind }
+                        }
+                        HotkeyRow {
+                            label: "Zero angle"
+                            value: backend.keyZero
+                            onBound: function(bind) { backend.keyZero = bind }
+                        }
+                        Hint { text: "Click a bind, then press the combo (keyboard or Mouse1–5). Esc cancels. Changes apply immediately." }
+                    }
+
+                    ActionButton {
                         text: "QUIT APP"
                         width: parent.width
-                        height: 40
-                        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        background: Rectangle { color: parent.hovered ? "#ff4c4c" : "#e63939"; radius: 4 }
+                        baseColor: "#b52e2e"
+                        hoverColor: "#e63939"
                         onClicked: backend.terminateApp()
                     }
                 }
@@ -618,249 +670,206 @@ Item {
             color: "#0d0d12"
             Flickable {
                 anchors.fill: parent
-                contentHeight: crossCol.implicitHeight + 40
+                contentHeight: crossCol.implicitHeight + 32
                 clip: true
+                ScrollBar.vertical: ScrollBar {}
                 Column {
                     id: crossCol
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
                     spacing: 12
 
-                    // Toggle
-                    Button {
-                        id: crosshairToggleBtn
-                        text: backend.crosshairOn ? "CROSSHAIR: ON" : "CROSSHAIR: OFF"
-                        width: parent.width
-                        height: 38
-                        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        background: Rectangle { 
-                            color: crosshairToggleBtn.pressed ? (backend.crosshairOn ? "#008a6e" : "#222") : (backend.crosshairOn ? (parent.hovered ? "#00b38f" : "#00cca3") : (parent.hovered ? "#444" : "#333"))
-                            radius: 4 
-                            border.color: crosshairToggleBtn.activeFocus ? "#00ffa3" : "transparent"
-                            border.width: 1
+                    Card {
+                        SectionHeader { text: "CROSSHAIR" }
+                        ActionButton {
+                            text: backend.crosshairOn ? "CROSSHAIR: ON" : "CROSSHAIR: OFF"
+                            width: parent.width
+                            baseColor: backend.crosshairOn ? "#00a382" : "#2a2a3e"
+                            hoverColor: backend.crosshairOn ? "#00cca3" : "#3a3a52"
+                            onClicked: backend.crosshairOn = !backend.crosshairOn
                         }
-                        onClicked: backend.crosshairOn = !backend.crosshairOn
-                    }
-
-                    // Thickness
-                    Column { spacing: 4; width: parent.width
-                        Text { text: "Line Thickness: " + Math.round(backend.crossThickness) + " px"; color: "white"; font.pixelSize: 12 }
-                        Slider {
+                        RowLayout {
+                            width: parent.width
+                            Text { text: "Line thickness"; color: "#c8c8d4"; font.pixelSize: 12; Layout.fillWidth: true }
+                            Text { text: Math.round(backend.crossThickness) + " px"; color: "#00ffcc"; font.bold: true; font.pixelSize: 12 }
+                        }
+                        DarkSlider {
                             width: parent.width
                             from: 1; to: 10; stepSize: 1
                             value: backend.crossThickness
                             onMoved: backend.crossThickness = Math.round(value)
                         }
+                        ActionButton {
+                            text: backend.crossPulse ? "PULSE ANIMATION: ON" : "PULSE ANIMATION: OFF"
+                            width: parent.width
+                            enabled: backend.crosshairOn
+                            baseColor: backend.crossPulse ? "#4a3080" : "#2a2a3e"
+                            borderColor: backend.crossPulse ? "#6644aa" : "transparent"
+                            onClicked: backend.crossPulse = !backend.crossPulse
+                        }
                     }
 
-                    Button {
-                        id: pulseToggleBtn
-                        text: backend.crossPulse ? "PULSE ANIMATION: ON" : "PULSE ANIMATION: OFF"
-                        width: parent.width
-                        height: 38
-                        enabled: backend.crosshairOn
-                        opacity: enabled ? 1.0 : 0.4
-                        contentItem: Text { 
-                            text: parent.text; 
-                            color: "white"; 
-                            font.bold: true; 
-                            horizontalAlignment: Text.AlignHCenter; 
-                            verticalAlignment: Text.AlignVCenter 
-                        }
-                        background: Rectangle { 
-                            color: !pulseToggleBtn.enabled ? "#222" : (backend.crossPulse ? "#4a3080" : "#333"); 
-                            radius: 4; 
-                            border.color: !pulseToggleBtn.enabled ? "#333" : (backend.crossPulse ? "#6644aa" : "#444"); 
-                            border.width: 1 
-                        }
-                        onClicked: backend.crossPulse = !backend.crossPulse
-                    }
-
-                    // ── HSV Spectrum Color Picker ──────────────────────
-                    Text { text: "CROSSHAIR COLOUR"; color: "#666"; font.pixelSize: 11; font.bold: true }
-
-                    Item {
-                        id: colorPicker
-                        width: parent.width
-                        height: svCanvas.height + hueStrip.height + hexRow.height + 16
-
-                        // Internal HSV state
-                        property real hue: 0.0
-                        property real sat: 1.0
-                        property real val: 1.0
-
-                        // Initialise from backend color when it changes
-                        function initFromBackend() {
-                            var c = backend.crossColor
-                            var hsv = rgbToHsv(c.r, c.g, c.b)
-                            hue = hsv[0]; sat = hsv[1]; val = hsv[2]
-                        }
-
-                        function rgbToHsv(r, g, b) {
-                            var max = Math.max(r,g,b), min = Math.min(r,g,b)
-                            var d = max - min, h = 0, s = max === 0 ? 0 : d/max, v = max
-                            if (d !== 0) {
-                                if (max === r) h = ((g-b)/d + (g < b ? 6 : 0)) / 6
-                                else if (max === g) h = ((b-r)/d + 2) / 6
-                                else h = ((r-g)/d + 4) / 6
-                            }
-                            return [h, s, v]
-                        }
-
-                        function hsvToRgb(h, s, v) {
-                            var i = Math.floor(h*6), f = h*6-i
-                            var p=v*(1-s), q=v*(1-f*s), t=v*(1-(1-f)*s)
-                            switch(i%6){
-                                case 0: return [v,t,p]
-                                case 1: return [q,v,p]
-                                case 2: return [p,v,t]
-                                case 3: return [p,q,v]
-                                case 4: return [t,p,v]
-                                case 5: return [v,p,q]
-                            }
-                            return [0,0,0]
-                        }
-
-                        function toHex2(x) {
-                            var s = Math.round(x*255).toString(16)
-                            return s.length===1 ? "0"+s : s
-                        }
-
-                        function applyColor() {
-                            var rgb = hsvToRgb(hue, sat, val)
-                            backend.crossColor = Qt.rgba(rgb[0], rgb[1], rgb[2], 1)
-                            hexField.text = toHex2(rgb[0]) + toHex2(rgb[1]) + toHex2(rgb[2])
-                        }
-
-                        Component.onCompleted: initFromBackend()
-                        Connections {
-                            target: backend
-                            function onCrosshairChanged() { colorPicker.initFromBackend() }
-                        }
-
-                        // Pure hue color for the SV gradient base
-                        property color hueColor: Qt.hsva(hue, 1.0, 1.0, 1.0)
-
-                        // ── SV Square ──────────────────────────────────
+                    // ── HSV colour picker ──────────────────────────────
+                    Card {
+                        SectionHeader { text: "COLOUR" }
                         Item {
-                            id: svCanvas
-                            x: 0; y: 0
-                            width: parent.width; height: Math.min(parent.width * 0.55, 160)
+                            id: colorPicker
+                            width: parent.width
+                            height: svCanvas.height + hueStrip.height + hexRow.height + 16
 
-                            // White → HueColor (left to right)
-                            Rectangle {
-                                anchors.fill: parent; radius: 6
-                                gradient: Gradient {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop { position: 0.0; color: "white" }
-                                    GradientStop { position: 1.0; color: colorPicker.hueColor }
+                            // Internal HSV state
+                            property real hue: 0.0
+                            property real sat: 1.0
+                            property real val: 1.0
+                            // Pure hue colour for the SV gradient base
+                            property color hueColor: Qt.hsva(hue, 1.0, 1.0, 1.0)
+
+                            function initFromBackend() {
+                                var c = backend.crossColor
+                                var hsv = rgbToHsv(c.r, c.g, c.b)
+                                hue = hsv[0]; sat = hsv[1]; val = hsv[2]
+                            }
+
+                            function rgbToHsv(r, g, b) {
+                                var max = Math.max(r, g, b), min = Math.min(r, g, b)
+                                var d = max - min, h = 0, s = max === 0 ? 0 : d / max, v = max
+                                if (d !== 0) {
+                                    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6
+                                    else if (max === g) h = ((b - r) / d + 2) / 6
+                                    else h = ((r - g) / d + 4) / 6
+                                }
+                                return [h, s, v]
+                            }
+
+                            function hsvToRgb(h, s, v) {
+                                var i = Math.floor(h * 6), f = h * 6 - i
+                                var p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s)
+                                switch (i % 6) {
+                                    case 0: return [v, t, p]
+                                    case 1: return [q, v, p]
+                                    case 2: return [p, v, t]
+                                    case 3: return [p, q, v]
+                                    case 4: return [t, p, v]
+                                    case 5: return [v, p, q]
+                                }
+                                return [0, 0, 0]
+                            }
+
+                            function toHex2(x) {
+                                var s = Math.round(x * 255).toString(16)
+                                return s.length === 1 ? "0" + s : s
+                            }
+
+                            function applyColor() {
+                                var rgb = hsvToRgb(hue, sat, val)
+                                backend.crossColor = Qt.rgba(rgb[0], rgb[1], rgb[2], 1)
+                            }
+
+                            Component.onCompleted: initFromBackend()
+                            Connections {
+                                target: backend
+                                function onCrosshairChanged() { colorPicker.initFromBackend() }
+                            }
+
+                            // Saturation / value square
+                            Item {
+                                id: svCanvas
+                                width: parent.width
+                                height: Math.min(parent.width * 0.55, 160)
+
+                                Rectangle {
+                                    anchors.fill: parent; radius: 6
+                                    gradient: Gradient {
+                                        orientation: Gradient.Horizontal
+                                        GradientStop { position: 0.0; color: "white" }
+                                        GradientStop { position: 1.0; color: colorPicker.hueColor }
+                                    }
+                                }
+                                Rectangle {
+                                    anchors.fill: parent; radius: 6
+                                    gradient: Gradient {
+                                        GradientStop { position: 0.0; color: "transparent" }
+                                        GradientStop { position: 1.0; color: "black" }
+                                    }
+                                }
+                                Rectangle {
+                                    x: colorPicker.sat * parent.width - width / 2
+                                    y: (1 - colorPicker.val) * parent.height - height / 2
+                                    width: 12; height: 12; radius: 6
+                                    color: "transparent"
+                                    border.color: "white"; border.width: 2
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    function pick(mx, my) {
+                                        colorPicker.sat = Math.max(0, Math.min(1, mx / svCanvas.width))
+                                        colorPicker.val = Math.max(0, Math.min(1, 1 - my / svCanvas.height))
+                                        colorPicker.applyColor()
+                                    }
+                                    onPressed: function(mouse) { pick(mouse.x, mouse.y) }
+                                    onPositionChanged: function(mouse) { if (pressed) pick(mouse.x, mouse.y) }
                                 }
                             }
-                            // Transparent → Black (top to bottom, overlaid)
-                            Rectangle {
-                                anchors.fill: parent; radius: 6
-                                gradient: Gradient {
-                                    orientation: Gradient.Vertical
-                                    GradientStop { position: 0.0; color: "transparent" }
-                                    GradientStop { position: 1.0; color: "black" }
+
+                            // Hue strip
+                            Item {
+                                id: hueStrip
+                                anchors.top: svCanvas.bottom; anchors.topMargin: 8
+                                width: parent.width; height: 18
+
+                                Rectangle {
+                                    anchors.fill: parent; radius: 9
+                                    gradient: Gradient {
+                                        orientation: Gradient.Horizontal
+                                        GradientStop { position: 0.000; color: "#ff0000" }
+                                        GradientStop { position: 0.167; color: "#ffff00" }
+                                        GradientStop { position: 0.333; color: "#00ff00" }
+                                        GradientStop { position: 0.500; color: "#00ffff" }
+                                        GradientStop { position: 0.667; color: "#0000ff" }
+                                        GradientStop { position: 0.833; color: "#ff00ff" }
+                                        GradientStop { position: 1.000; color: "#ff0000" }
+                                    }
+                                }
+                                Rectangle {
+                                    x: colorPicker.hue * parent.width - width / 2
+                                    y: (parent.height - height) / 2
+                                    width: 10; height: 22; radius: 5
+                                    color: "white"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    function pick(mx) {
+                                        colorPicker.hue = Math.max(0, Math.min(1, mx / hueStrip.width))
+                                        colorPicker.applyColor()
+                                    }
+                                    onPressed: function(mouse) { pick(mouse.x) }
+                                    onPositionChanged: function(mouse) { if (pressed) pick(mouse.x) }
                                 }
                             }
 
-                            // Picker cursor circle
-                            Rectangle {
-                                x: colorPicker.sat * parent.width - width/2
-                                y: (1 - colorPicker.val) * parent.height - height/2
-                                width: 12; height: 12; radius: 6
-                                color: "transparent"
-                                border.color: "white"; border.width: 2
-                            }
+                            // Swatch + hex field
+                            Row {
+                                id: hexRow
+                                anchors.top: hueStrip.bottom; anchors.topMargin: 8
+                                width: parent.width; spacing: 10
 
-                            MouseArea {
-                                anchors.fill: parent
-                                function pick(mx, my) {
-                                    colorPicker.sat = Math.max(0, Math.min(1, mx / svCanvas.width))
-                                    colorPicker.val = Math.max(0, Math.min(1, 1 - my / svCanvas.height))
-                                    colorPicker.applyColor()
+                                Rectangle {
+                                    width: 34; height: 34; radius: 6
+                                    color: backend.crossColor
+                                    border.color: "#3a3a55"; border.width: 1
                                 }
-                                onPressed: { pick(mouse.x, mouse.y) }
-                                onPositionChanged: { if (pressed) pick(mouse.x, mouse.y) }
-                            }
-                        }
-
-                        // ── Rainbow Hue Strip ──────────────────────────
-                        Item {
-                            id: hueStrip
-                            x: 0; anchors.top: svCanvas.bottom; anchors.topMargin: 8
-                            width: parent.width; height: 18
-
-                            Rectangle {
-                                anchors.fill: parent; radius: 9
-                                gradient: Gradient {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop { position: 0.000; color: "#ff0000" }
-                                    GradientStop { position: 0.167; color: "#ffff00" }
-                                    GradientStop { position: 0.333; color: "#00ff00" }
-                                    GradientStop { position: 0.500; color: "#00ffff" }
-                                    GradientStop { position: 0.667; color: "#0000ff" }
-                                    GradientStop { position: 0.833; color: "#ff00ff" }
-                                    GradientStop { position: 1.000; color: "#ff0000" }
-                                }
-                            }
-
-                            // Hue cursor thumb
-                            Rectangle {
-                                x: colorPicker.hue * parent.width - width/2
-                                y: (parent.height - height)/2
-                                width: 10; height: 22; radius: 5
-                                color: "white"
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                function pick(mx) {
-                                    colorPicker.hue = Math.max(0, Math.min(1, mx / hueStrip.width))
-                                    colorPicker.applyColor()
-                                }
-                                onPressed: { pick(mouse.x) }
-                                onPositionChanged: { if (pressed) pick(mouse.x) }
-                            }
-                        }
-
-                        // ── Swatch + Hex field ─────────────────────────
-                        Row {
-                            id: hexRow
-                            anchors.top: hueStrip.bottom; anchors.topMargin: 8
-                            width: parent.width; spacing: 10
-
-                            Rectangle {
-                                width: 32; height: 32; radius: 4
-                                color: backend.crossColor
-                                border.color: "#555"; border.width: 1
-                            }
-
-                            Rectangle {
-                                width: parent.width - 42; height: 32; radius: 4
-                                color: "#1c1c2e"; border.color: "#4466ff"; border.width: 1
-                                Row {
-                                    anchors { fill: parent; leftMargin: 10 }
-                                    spacing: 4
-                                    Text { text: "#"; color: "#888"; verticalAlignment: Text.AlignVCenter; height: parent.height }
-                                    TextInput {
-                                        id: hexField
-                                        width: parent.width - 24
-                                        height: parent.height
-                                        color: "white"
-                                        font.pixelSize: 14
-                                        text: colorPicker.toHex2(backend.crossColor.r) + colorPicker.toHex2(backend.crossColor.g) + colorPicker.toHex2(backend.crossColor.b)
-                                        verticalAlignment: Text.AlignVCenter
-                                        onEditingFinished: {
-                                            var hex = text.replace("#","")
-                                            if (hex.length === 6) {
-                                                var r = parseInt(hex.substr(0,2),16)/255
-                                                var g = parseInt(hex.substr(2,2),16)/255
-                                                var b = parseInt(hex.substr(4,2),16)/255
-                                                backend.crossColor = Qt.rgba(r,g,b,1)
-                                                colorPicker.initFromBackend()
-                                            }
+                                DarkField {
+                                    id: hexField
+                                    width: parent.width - 44
+                                    text: "#" + colorPicker.toHex2(backend.crossColor.r) +
+                                          colorPicker.toHex2(backend.crossColor.g) +
+                                          colorPicker.toHex2(backend.crossColor.b)
+                                    onEditingFinished: {
+                                        var hex = text.replace("#", "")
+                                        if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+                                            backend.crossColor = Qt.rgba(parseInt(hex.substr(0, 2), 16) / 255,
+                                                                         parseInt(hex.substr(2, 2), 16) / 255,
+                                                                         parseInt(hex.substr(4, 2), 16) / 255, 1)
+                                            colorPicker.initFromBackend()
                                         }
                                     }
                                 }
@@ -868,155 +877,134 @@ Item {
                         }
                     }
 
-
-
-
-                    // Fine Position  
-                    Text { text: "FINE POSITION"; color: "#666"; font.pixelSize: 11; font.bold: true; verticalAlignment: Text.AlignVCenter; height: 32 }
-
-
-                    Row {
-                        spacing: 6; width: parent.width
-                        Text { text: "X: " + backend.crossOffsetX.toFixed(1); color: "white"; verticalAlignment: Text.AlignVCenter; width: 80 }
-                        Button { text: "← X −0.5"; width: 70; height: 30
-                            contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: parent.hovered ? "#555" : "#333"; radius: 4 }
-                            onClicked: backend.crossOffsetX = backend.crossOffsetX - 0.5 }
-                        Button { text: "X +0.5 →"; width: 70; height: 30
-                            contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: parent.hovered ? "#555" : "#333"; radius: 4 }
-                            onClicked: backend.crossOffsetX = backend.crossOffsetX + 0.5 }
-                    }
-                    Row {
-                        spacing: 6; width: parent.width
-                        Text { text: "Y: " + backend.crossOffsetY.toFixed(1); color: "white"; verticalAlignment: Text.AlignVCenter; width: 80 }
-                        Button { text: "↑ Y −0.5"; width: 70; height: 30
-                            contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: parent.hovered ? "#555" : "#333"; radius: 4 }
-                            onClicked: backend.crossOffsetY = backend.crossOffsetY - 0.5 }
-                        Button { text: "↓ Y +0.5"; width: 70; height: 30
-                            contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: parent.hovered ? "#555" : "#333"; radius: 4 }
-                            onClicked: backend.crossOffsetY = backend.crossOffsetY + 0.5 }
-                    }
-
-                    // Snap to Center
-                    Button {
-                        text: "SNAP TO CENTER"
-                        width: parent.width
-                        height: 36
-                        contentItem: Text {
-                            text: parent.text
-                            color: "white"
-                            font.pixelSize: 12
-                            font.bold: true
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#3375ee" : "#224ecc"
-                            radius: 6
-                            border.color: "#4488ff"
-                            border.width: 1
-                        }
-                        onClicked: {
-                            backend.crossOffsetX = 0;
-                            backend.crossOffsetY = 0;
-                        }
-                    }
-
-                    // Reset to Defaults
-                    Button {
-                        text: "RESET TO DEFAULTS"
-                        width: parent.width
-                        height: 36
-                        contentItem: Text {
-                            text: parent.text
-                            color: "white"
-                            font.pixelSize: 12
-                            font.bold: true
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#cc3333" : "#aa2222"
-                            radius: 6
-                            border.color: "#ff6666"
-                            border.width: 1
-                        }
-                        onClicked: backend.resetCrosshairToDefaults()
-                    }
-
-                    // Saved Config
-                    Text { text: "SAVED CONFIG"; color: "#666"; font.pixelSize: 11; font.bold: true }
-
-                    Row {
-                        spacing: 8; width: parent.width
-                        TextField {
-                            id: presetNameField
-                            width: parent.width - 110
-                            placeholderText: "Config name..."
-                            color: "white"
-                            background: Rectangle { color: "#1c1c2e"; radius: 4; border.color: "#333"; border.width: 1 }
-                        }
-                        Button {
-                            text: "SAVE"
-                            width: 96; height: 34
-                            contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: parent.hovered ? "#3375ee" : "#224ecc"; radius: 4 }
-                            onClicked: {
-                                if (presetNameField.text.trim() !== "") {
-                                    backend.saveCrosshairPreset(presetNameField.text.trim())
-                                    presetNameField.text = ""
-                                    presetList.model = backend.crosshairPresetNames()
+                    // Fine position
+                    Card {
+                        SectionHeader { text: "POSITION" }
+                        Repeater {
+                            model: [
+                                { axis: "X", less: "← −0.5", more: "+0.5 →" },
+                                { axis: "Y", less: "↑ −0.5", more: "+0.5 ↓" }
+                            ]
+                            delegate: RowLayout {
+                                width: parent.width
+                                spacing: 8
+                                Text {
+                                    text: modelData.axis + ": " +
+                                          (modelData.axis === "X" ? backend.crossOffsetX : backend.crossOffsetY).toFixed(1)
+                                    color: "white"; font.pixelSize: 13
+                                    Layout.fillWidth: true
                                 }
+                                ActionButton {
+                                    text: modelData.less
+                                    Layout.preferredWidth: 90
+                                    implicitHeight: 30
+                                    font.bold: false
+                                    onClicked: {
+                                        if (modelData.axis === "X") backend.crossOffsetX = backend.crossOffsetX - 0.5
+                                        else backend.crossOffsetY = backend.crossOffsetY - 0.5
+                                    }
+                                }
+                                ActionButton {
+                                    text: modelData.more
+                                    Layout.preferredWidth: 90
+                                    implicitHeight: 30
+                                    font.bold: false
+                                    onClicked: {
+                                        if (modelData.axis === "X") backend.crossOffsetX = backend.crossOffsetX + 0.5
+                                        else backend.crossOffsetY = backend.crossOffsetY + 0.5
+                                    }
+                                }
+                            }
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: 10
+                            ActionButton {
+                                text: "SNAP TO CENTER"
+                                width: (parent.width - 10) / 2
+                                baseColor: "#224ecc"
+                                hoverColor: "#3375ee"
+                                onClicked: {
+                                    backend.crossOffsetX = 0
+                                    backend.crossOffsetY = 0
+                                }
+                            }
+                            ActionButton {
+                                text: "RESET TO DEFAULTS"
+                                width: (parent.width - 10) / 2
+                                baseColor: "#8a2222"
+                                hoverColor: "#b52e2e"
+                                onClicked: backend.resetCrosshairToDefaults()
                             }
                         }
                     }
 
-                    // Preset list
-                    Column {
-                        id: presetListContainer
-                        width: parent.width
-                        spacing: 4
-
-                        Connections {
-                            target: backend
-                            onCrosshairPresetsChanged: presetList.model = backend.crosshairPresetNames()
+                    // Saved configs
+                    Card {
+                        SectionHeader { text: "SAVED CONFIGS" }
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            DarkField {
+                                id: presetNameField
+                                width: parent.width - 104
+                                placeholderText: "Config name…"
+                                onAccepted: saveBtn.clicked()
+                            }
+                            ActionButton {
+                                id: saveBtn
+                                text: "SAVE"
+                                width: 96
+                                implicitHeight: 34
+                                baseColor: "#224ecc"
+                                hoverColor: "#3375ee"
+                                enabled: presetNameField.text.trim() !== ""
+                                onClicked: {
+                                    backend.saveCrosshairPreset(presetNameField.text.trim())
+                                    presetNameField.text = ""
+                                }
+                            }
                         }
-
                         ListView {
                             id: presetList
                             width: parent.width
-                            height: Math.min(model.length * 38, 160)
-                            model: backend.crosshairPresetNames()
+                            height: Math.min(count * 38, 190)
+                            spacing: 4
                             clip: true
+                            model: backend.crosshairPresetNames()
+                            Connections {
+                                target: backend
+                                function onCrosshairPresetsChanged() { presetList.model = backend.crosshairPresetNames() }
+                            }
                             delegate: Rectangle {
                                 width: presetList.width
                                 height: 34
-                                color: "#1a1a2e"
-                                radius: 4
-                                Row {
-                                    anchors { fill: parent; leftMargin: 8; rightMargin: 4 }
+                                radius: 6
+                                color: "#1b1b2a"
+                                RowLayout {
+                                    anchors { fill: parent; leftMargin: 10; rightMargin: 4 }
                                     spacing: 6
                                     Text {
                                         text: modelData
                                         color: "white"
-                                        font.pixelSize: 11
-                                        verticalAlignment: Text.AlignVCenter
-                                        width: parent.width - 80
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
-                                        height: parent.height
+                                        Layout.fillWidth: true
                                     }
-                                    Button { text: "Load"; width: 46; height: 26
-                                        contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                        background: Rectangle { color: parent.hovered ? "#3a9e6e" : "#2a7a54"; radius: 3 }
-                                        onClicked: { backend.loadCrosshairPreset(index); presetList.model = backend.crosshairPresetNames() }
+                                    ActionButton {
+                                        text: "Load"
+                                        implicitWidth: 52; implicitHeight: 26
+                                        font.pixelSize: 11
+                                        baseColor: "#2a7a54"
+                                        hoverColor: "#3a9e6e"
+                                        onClicked: backend.loadCrosshairPreset(index)
                                     }
-                                    Button { text: "✕"; width: 26; height: 26
-                                        contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                        background: Rectangle { color: parent.hovered ? "#cc3333" : "#882222"; radius: 3 }
-                                        onClicked: { backend.deleteCrosshairPreset(index); presetList.model = backend.crosshairPresetNames() }
+                                    ActionButton {
+                                        text: "✕"
+                                        implicitWidth: 26; implicitHeight: 26
+                                        baseColor: "#6a2222"
+                                        hoverColor: "#cc3333"
+                                        onClicked: backend.deleteCrosshairPreset(index)
                                     }
                                 }
                             }
@@ -1025,532 +1013,219 @@ Item {
                 }
             }
         }
-
-
-
 
         // ─── UPDATES ────────────────────────────────────────────────
         Rectangle {
             color: "#0d0d12"
             Column {
-                anchors.fill: parent
-                anchors.margins: 20
-                spacing: 15
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
+                spacing: 12
 
-                Row {
-                    spacing: 10
-                    Text { text: "Version: " + backend.versionStr; color: "white"; font.pixelSize: 16; verticalAlignment: Text.AlignVCenter }
-                    Rectangle {
-                        width: channelLabel.width + 12; height: 20; radius: 4
-                        color: backend.betaUpdates ? "#332200" : "#001a0d"
-                        border.color: backend.betaUpdates ? "#ccaa00" : "#00aa44"
-                        border.width: 1
-                        anchors.verticalCenter: parent.verticalCenter
+                Card {
+                    Row {
+                        spacing: 10
                         Text {
-                            id: channelLabel
-                            anchors.centerIn: parent
-                            text: backend.betaUpdates ? "BETA" : "STABLE"
-                            color: backend.betaUpdates ? "#ffdd44" : "#00ff88"
-                            font.bold: true; font.pixelSize: 10
+                            text: "Version " + backend.versionStr
+                            color: "white"; font.pixelSize: 18; font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Rectangle {
+                            width: channelLabel.width + 14; height: 20; radius: 4
+                            color: backend.betaUpdates ? "#332200" : "#001a0d"
+                            border.color: backend.betaUpdates ? "#ccaa00" : "#00aa44"
+                            border.width: 1
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                                id: channelLabel
+                                anchors.centerIn: parent
+                                text: backend.betaUpdates ? "BETA" : "STABLE"
+                                color: backend.betaUpdates ? "#ffdd44" : "#00ff88"
+                                font.bold: true; font.pixelSize: 10
+                            }
                         }
                     }
-                }
-
-                Text {
-                    text: "Latest: " + backend.latestVersion
-                    color: "#aaa"
-                    visible: backend.latestVersion !== ""
-                }
-
-                Button {
-                    text: {
-                        if (backend.isDownloading) return "DOWNLOADING..."
-                        if (backend.downloadComplete) return "INSTALL UPDATE"
-                        if (backend.isCheckingForUpdates) return "CHECKING..."
-                        if (backend.updateStatus === "Downloaded update was invalid. Click to retry.") return "RETRY DOWNLOAD"
-                        if (backend.updateAvailable) return "UPDATE AVAILABLE"
-                        if (backend.hasCheckedForUpdates && !backend.updateAvailable) return "UP TO DATE"
-                        return "CHECK FOR UPDATES"
-                    }
-                    width: parent.width
-                    height: 44
-                    enabled: !backend.isDownloading && !backend.isCheckingForUpdates
-                    contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { 
-                        color: backend.downloadComplete ? "#6a4cff" : (parent.hovered ? "#00cca3" : "#00a382")
-                        radius: 4 
-                    }
-                    onClicked: {
-                        if (backend.downloadComplete) {
-                            backend.downloadUpdate() // Launches the downloaded installer
-                        } else if (backend.updateAvailable) {
-                            backend.downloadUpdate()
-                        } else {
-                            backend.checkForUpdates()
-                        }
-                    }
-                }
-
-                Row {
-                    spacing: 10
-                    width: parent.width
-
                     Text {
-                        id: spinCog
-                        text: "\uf013" // Font Awesome / Unicode Cog placeholder
-                        font.family: "Segoe UI Symbol"
-                        font.pixelSize: 20
-                        color: "#00cca3"
-                        visible: backend.isCheckingForUpdates || backend.isDownloading
-                        
-                        RotationAnimation on rotation {
-                            from: 0; to: 360; duration: 1500; loops: Animation.Infinite
-                            running: spinCog.visible
+                        text: "Latest online: " + backend.latestVersion
+                        color: "#9a9ab0"
+                        font.pixelSize: 12
+                        visible: backend.hasCheckedForUpdates && backend.latestVersion !== ""
+                    }
+
+                    ActionButton {
+                        width: parent.width
+                        implicitHeight: 44
+                        text: {
+                            if (backend.isDownloading) return "DOWNLOADING…"
+                            if (backend.downloadComplete) return "INSTALL UPDATE"
+                            if (backend.isCheckingForUpdates) return "CHECKING…"
+                            if (backend.updateStatus === "Downloaded update was invalid. Click to retry.") return "RETRY DOWNLOAD"
+                            if (backend.updateAvailable) return "DOWNLOAD UPDATE"
+                            if (backend.hasCheckedForUpdates) return "CHECK AGAIN"
+                            return "CHECK FOR UPDATES"
+                        }
+                        enabled: !backend.isDownloading && !backend.isCheckingForUpdates
+                        baseColor: backend.downloadComplete ? "#5a3ce0" : "#00a382"
+                        hoverColor: backend.downloadComplete ? "#6a4cff" : "#00cca3"
+                        onClicked: {
+                            if (backend.downloadComplete || backend.updateAvailable)
+                                backend.downloadUpdate()
+                            else
+                                backend.checkForUpdates()
                         }
                     }
 
-                    Text {
-                        text: backend.updateStatus
-                        color: {
-                            if (backend.downloadComplete) return "#6a4cff"
-                            if (backend.updateAvailable) return "#00cca3"
-                            if (backend.isDownloading) return "#00ccff"
-                            if (backend.isCheckingForUpdates) return "#aaa"
-                            return "white"
+                    Row {
+                        spacing: 10
+                        BusyIndicator {
+                            width: 22; height: 22
+                            running: backend.isCheckingForUpdates || backend.isDownloading
+                            visible: running
                         }
-                        font.bold: true
-                        font.pixelSize: 14
-                        verticalAlignment: Text.AlignVCenter
-                        height: spinCog.height
-                    }
-                }
-
-                // Confirm Latest Version Details
-                Rectangle {
-                    width: parent.width
-                    height: 60
-                    color: "#161625"
-                    radius: 8
-                    border.color: "#222"
-                    visible: backend.hasCheckedForUpdates
-                    
-                    Column {
-                        anchors.centerIn: parent
-                        spacing: 4
-                        Text { 
-                            text: backend.updateAvailable ? "New Version Found!" : "Up to Date"
-                            color: backend.updateAvailable ? "#00cca3" : "#888"
+                        Text {
+                            text: backend.updateStatus
+                            color: {
+                                if (backend.downloadComplete) return "#8a70ff"
+                                if (backend.updateAvailable) return "#00cca3"
+                                if (backend.isDownloading) return "#00ccff"
+                                return "#c8c8d4"
+                            }
                             font.bold: true
-                            font.pixelSize: 12
-                            anchors.horizontalCenter: parent.horizontalCenter
+                            font.pixelSize: 13
+                            height: 22
+                            verticalAlignment: Text.AlignVCenter
                         }
-                        Text { 
-                            text: "Online: " + backend.latestVersion + "  |  Local: " + backend.versionStr
-                            color: "#ccc"
-                            font.pixelSize: 11
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
+                    }
+                    Hint {
+                        text: backend.updateHistory
+                        visible: backend.updateHistory !== ""
                     }
                 }
 
                 Text {
-                    text: "Update History: " + backend.updateHistory
-                    color: "#888"
-                    font.pixelSize: 12
-                    visible: backend.updateHistory !== ""
-                    horizontalAlignment: Text.AlignHCenter
-                    width: parent.width
-                }
-
-                Item { height: 20 }
-
-                Text {
-                    text: "\"The best wins begin with the best drops\""
-                    color: "#00ffa3"
+                    text: "“The best wins begin with the best drops”"
+                    color: "#00cca3"
                     font.pixelSize: 13
                     font.italic: true
                     horizontalAlignment: Text.AlignHCenter
                     width: parent.width
+                    topPadding: 8
                 }
-
             }
         }
 
-        // ─── DEBUG ────────────────────────────────────────────────
+        // ─── DEBUG ──────────────────────────────────────────────────
         Rectangle {
             color: "#0d0d12"
             Flickable {
                 anchors.fill: parent
-                contentHeight: debugRootCol.implicitHeight + 40
+                contentHeight: debugRootCol.implicitHeight + 32
                 clip: true
+                ScrollBar.vertical: ScrollBar {}
                 Column {
                     id: debugRootCol
-                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
-                    spacing: 15
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
+                    spacing: 12
 
-                    Text { text: "DEBUG DIAGNOSTICS"; color: "#666"; font.pixelSize: 11; font.bold: true }
-
-                    RowLayout {
-                        Switch {
+                    Card {
+                        SectionHeader { text: "DEBUG" }
+                        DarkSwitch {
+                            text: "Show debug overlay on screen"
                             checked: backend.showDebugOverlay
-                            onCheckedChanged: backend.showDebugOverlay = checked
-                        }
-                        Text { text: "Show Debug Overlay on Screen"; color: "white"; font.pixelSize: 13 }
-                    }
-
-                    Rectangle {
-                        width: parent.width; radius: 6; color: "#0e0e1a"; border.color: "#333"; border.width: 1
-                        height: debugCol.implicitHeight + 30
-                        Column {
-                            id: debugCol
-                            anchors { left: parent.left; right: parent.right; top: parent.top }
-                            anchors.margins: 15
-                            spacing: 9
-
-                            // Header
-                            Text { text: "LIVE DIAGNOSTICS"; color: "#444"; font.pixelSize: 10; font.bold: true; topPadding: 5 }
-
-                            // Detection metrics
-                            RowLayout { width: parent.width
-                                Text { text: "Scanner Delay:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.detectionDelayMs + " ms"; color: backend.detectionDelayMs < 15 ? "#00ffaa" : "#ff6644"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Match Ratio:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.detectionRatioPct + "%"; color: "#00ccff"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Peak Match (2s):"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.peakMatchPct + "%"; color: backend.peakMatchPct > 0 ? "#ffaa00" : "#555"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Dive State:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.isDiving ? "DIVING" : "GLIDING"; color: backend.isDiving ? "#ff5050" : "#50ff80"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Input Locked:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.inputLocked ? "YES" : "NO"; color: backend.inputLocked ? "#cc88ff" : "#555"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Lock Reason:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.lockTriggerReason; color: backend.lockTriggerReason !== "None" ? "#ffaa00" : "#555"; font.bold: true; font.pixelSize: 13 }
-                            }
-
-                            Rectangle { width: parent.width; height: 1; color: "#222"; }
-
-                            // Game gate status
-                            RowLayout { width: parent.width
-                                Text { text: "Fortnite Running:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.fnRunning ? "YES" : "NO"; color: backend.fnRunning ? "#00ffcc" : "#ff4c4c"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Fortnite Focused:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.fnFocused ? "YES" : "NO"; color: backend.fnFocused ? "#00ffcc" : "#ff4c4c"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Fortnite Monitor:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.fortniteMonitorLabel; color: backend.fnRunning ? "#00ffcc" : "#ff4c4c"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Mouse in Fortnite Focus:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.fnMouseHidden ? "YES" : "NO"; color: backend.fnMouseHidden ? "#00ffcc" : "#ff4c4c"; font.bold: true; font.pixelSize: 13 }
-                            }
-
-                            Rectangle { width: parent.width; height: 1; color: "#222"; }
-
-                            // System info
-                            RowLayout { width: parent.width
-                                Text { text: "ROI:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.roiDimensions; color: "#88aacc"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Scanner CPU:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: backend.scannerCpuPct + "%"; color: backend.scannerCpuPct < 50 ? "#00ffaa" : "#ff6644"; font.bold: true; font.pixelSize: 13 }
-                            }
-                            RowLayout { width: parent.width
-                                Text { text: "Version:"; color: "#aaa"; font.pixelSize: 13; Layout.fillWidth: true }
-                                Text { text: "v" + backend.versionStr; color: "#666"; font.bold: true; font.pixelSize: 13 }
-                            }
-
-                            Rectangle { width: parent.width; height: 1; color: "#444"; }
-
-                            // X-RAY MONITOR (v5.1.11)
-                            Text { text: "NITRO X-RAY MONITOR (1ms)"; color: "#00ffa3"; font.pixelSize: 10; font.bold: true; topPadding: 5 }
-
-                            RowLayout { width: parent.width
-                                Text { text: "Physical Truth (P/T):"; color: "#aaa"; font.pixelSize: 12; Layout.fillWidth: true }
-                                Text { text: backend.physicalKeyStates; color: "#00ffa3"; font.bold: true; font.pixelSize: 11; font.family: "Consolas" }
-                            }
-
-                            RowLayout { width: parent.width
-                                Text { text: "RAW Hardware W:"; color: "#aaa"; font.pixelSize: 12; Layout.fillWidth: true }
-                                Text { text: backend.rawWState; color: "#00ffa3"; font.bold: true; font.pixelSize: 12 }
-                            }
-
-                            RowLayout { width: parent.width
-                                Text { text: "Input Lock State:"; color: "#aaa"; font.pixelSize: 12; Layout.fillWidth: true }
-                                Text { text: backend.inputLockStatus; color: backend.inputLockStatus === "ACTIVE" ? "#ff4c4c" : "#00ffaa"; font.bold: true; font.pixelSize: 12 }
-                            }
-
-                            RowLayout { width: parent.width
-                                Text { text: "Ghost Detector:"; color: "#aaa"; font.pixelSize: 12; Layout.fillWidth: true }
-                                Text { text: backend.ghostMismatch ? "MISMATCH!" : "OK"; color: backend.ghostMismatch ? "#ff4c4c" : "#00ffaa"; font.bold: true; font.pixelSize: 12 }
-                            }
-
-                            Text { text: "Last Sync Event:"; color: "#aaa"; font.pixelSize: 12 }
-                            Rectangle {
-                                width: parent.width; height: 40; radius: 4; color: "#1c1c2e"; border.color: "#333"; border.width: 1
-                                Text { 
-                                    anchors.centerIn: parent; width: parent.width - 10
-                                    text: backend.nitroSyncLog; color: "#cc88ff"; font.pixelSize: 11; font.family: "Consolas"; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
-                                }
-                            }
-
-                            Item { height: 5 }
+                            onToggled: backend.showDebugOverlay = checked
                         }
                     }
 
-                    Text {
-                        text: "Angle updates only when Fortnite is focused AND mouse is hidden. Input locking pauses camera during FOV transitions."
-                        color: "#555"; font.pixelSize: 11; width: parent.width; wrapMode: Text.WordWrap
+                    Card {
+                        spacing: 7
+                        SectionHeader { text: "DETECTION" }
+                        StatRow { label: "Scanner delay"; value: backend.detectionDelayMs + " ms"; valueColor: backend.detectionDelayMs < 15 ? "#00ffaa" : "#ff6644" }
+                        StatRow { label: "Match ratio"; value: backend.detectionRatioPct + "%"; valueColor: "#00ccff" }
+                        StatRow { label: "Peak match (2s)"; value: backend.peakMatchPct + "%"; valueColor: backend.peakMatchPct > 0 ? "#ffaa00" : "#5a5a70" }
+                        StatRow { label: "State"; value: backend.isDiving ? "DIVING" : "GLIDING"; valueColor: backend.isDiving ? "#ff5050" : "#50ff80" }
+                        StatRow { label: "ROI"; value: backend.roiDimensions; valueColor: "#88aacc" }
+                        StatRow { label: "Scanner CPU"; value: backend.scannerCpuPct + "%"; valueColor: backend.scannerCpuPct < 50 ? "#00ffaa" : "#ff6644" }
                     }
 
-                    Item { height: 10 }
-
-                    // ENGINE SETTINGS STATUS
-                    Text { text: "ENGINE SETTINGS"; color: "#666"; font.pixelSize: 11; font.bold: true }
-                    Text {
-                        text: "Direct Hardware Mode: ON | HUD Smoothing: ON | Atomic Shield: ON"
-                        color: "#00ffaa"; font.pixelSize: 10; width: parent.width; wrapMode: Text.WordWrap
+                    Card {
+                        spacing: 7
+                        SectionHeader { text: "TRANSITIONS" }
+                        StatRow { label: "Mode"; value: backend.inputLockMode === 1 ? "BLEND (no lock)" : "BLOCK INPUT"; valueColor: "#00ffcc" }
+                        StatRow { label: "Input locked now"; value: backend.inputLocked ? "YES" : "NO"; valueColor: backend.inputLocked ? "#cc88ff" : "#5a5a70" }
+                        StatRow { label: "Last transition"; value: backend.lockTriggerReason; valueColor: backend.lockTriggerReason !== "None" ? "#ffaa00" : "#5a5a70" }
+                        StatRow { label: "Angle"; value: backend.angleEstimated ? "ESTIMATED" : "EXACT"; valueColor: backend.angleEstimated ? "#ffbe46" : "#00ffaa" }
                     }
 
-                    Item { height: 5 }
-
-                    // HUD POSITION & MONITOR
-                    Text { text: "HUD & MONITOR INFO"; color: "#666"; font.pixelSize: 11; font.bold: true }
-                    RowLayout { width: parent.width
-                        Text { text: "HUD Position:"; color: "#aaa"; font.pixelSize: 11; Layout.fillWidth: true }
-                        Text { text: "(" + backend.hudX + ", " + backend.hudY + ")"; color: "#88ccff"; font.bold: true; font.pixelSize: 11 }
-                    }
-                    RowLayout { width: parent.width
-                        Text { text: "Active Monitor:"; color: "#aaa"; font.pixelSize: 11; Layout.fillWidth: true }
-                        Text { text: backend.screenIndex; color: "#88ccff"; font.bold: true; font.pixelSize: 11 }
+                    Card {
+                        spacing: 7
+                        SectionHeader { text: "FORTNITE" }
+                        StatRow { label: "Running"; value: backend.fnRunning ? "YES" : "NO"; valueColor: backend.fnRunning ? "#00ffcc" : "#ff4c4c" }
+                        StatRow { label: "Focused"; value: backend.fnFocused ? "YES" : "NO"; valueColor: backend.fnFocused ? "#00ffcc" : "#ff4c4c" }
+                        StatRow { label: "Monitor"; value: backend.fortniteMonitorLabel; valueColor: backend.fnRunning ? "#00ffcc" : "#ff4c4c" }
+                        StatRow { label: "Mouse captured"; value: backend.fnMouseHidden ? "YES" : "NO"; valueColor: backend.fnMouseHidden ? "#00ffcc" : "#ff4c4c" }
+                        Hint { text: "The angle only updates while Fortnite is focused and the mouse is captured (cursor hidden)." }
                     }
 
-                    // Ctrl+drag tip card
-                    Rectangle {
-                        width: parent.width
-                        height: ctrlDragCol.implicitHeight + 16
-                        radius: 6
-                        color: "#0e1a2e"
-                        border.color: "#1a4a88"
-                        border.width: 1
+                    Card {
+                        spacing: 7
+                        SectionHeader { text: "KEY STATE MONITOR" }
+                        StatRow { label: "Physical / tracked"; value: backend.physicalKeyStates; valueColor: "#00ffa3" }
+                        StatRow { label: "Raw W key"; value: backend.rawWState; valueColor: "#00ffa3" }
+                        StatRow { label: "Stuck-key check"; value: backend.ghostMismatch ? "MISMATCH" : "OK"; valueColor: backend.ghostMismatch ? "#ff4c4c" : "#00ffaa" }
+                        Hint { text: "A mismatch means Windows thinks a key is held that isn't physically down — the ghost-walk symptom of Block Input mode." }
+                    }
 
-                        Column {
-                            id: ctrlDragCol
-                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
-                            spacing: 4
+                    Card {
+                        spacing: 7
+                        SectionHeader { text: "HUD" }
+                        StatRow { label: "HUD position"; value: "(" + backend.hudX + ", " + backend.hudY + ")"; valueColor: "#88ccff" }
+                        StatRow { label: "Active monitor"; value: "Monitor " + (backend.screenIndex + 1); valueColor: "#88ccff" }
+                        Hint { text: "Move the angle box in-game: hold Ctrl, then click and drag it. Release to save." }
+                    }
 
-                            Row {
-                                spacing: 6
-                                Text { text: "💡"; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
-                                Text {
-                                    text: "Move the angle box while in-game"
-                                    color: "#88ccff"
-                                    font.pixelSize: 11
-                                    font.bold: true
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                            }
-
-                            Text {
-                                width: parent.width
-                                text: "Hold  Ctrl  then click-and-drag the HUD box directly inside Fortnite to reposition it. Release to save."
-                                color: "#8899bb"
-                                font.pixelSize: 10
-                                wrapMode: Text.WordWrap
-                            }
-
-                            Rectangle {
-                                width: parent.width; height: 26; radius: 4
-                                color: "#12213a"
-                                border.color: "#2255aa"; border.width: 1
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "Ctrl  +  Click & Drag  →  move angle box"
-                                    color: "#aaccff"
-                                    font.pixelSize: 11
-                                    font.bold: true
-                                    font.family: "Consolas"
-                                }
-                            }
+                    Card {
+                        SectionHeader { text: "AUTO-MANTLE DIAGNOSTICS"; color: "#ff6644" }
+                        Hint {
+                            text: "Test one at a time. ON = that feature is disabled. If auto-mantling stops, that switch is the culprit. Restart BetterAngle after toggling."
+                            color: "#aa7755"
+                        }
+                        DiagToggle {
+                            checked: backend.diagNoRawInput
+                            onText: "Raw input sink: DISABLED"
+                            offText: "Raw input sink: normal"
+                            description: "Disables the background mouse listener (RegisterRawInputDevices). Angle tracking stops."
+                            onToggled: function(value) { backend.diagNoRawInput = value }
+                        }
+                        DiagToggle {
+                            checked: backend.diagNoTopmost
+                            onText: "Topmost overlay: DISABLED"
+                            offText: "Topmost overlay: normal"
+                            description: "Removes HWND_TOPMOST from the overlay. The HUD may go behind Fortnite in fullscreen."
+                            onToggled: function(value) { backend.diagNoTopmost = value }
+                        }
+                        DiagToggle {
+                            checked: backend.diagNoTimer
+                            onText: "1ms timer: DISABLED"
+                            offText: "1ms timer: normal"
+                            description: "Stops forcing 1ms Windows timer resolution (timeBeginPeriod). Polling may become jittery."
+                            onToggled: function(value) { backend.diagNoTimer = value }
                         }
                     }
 
-                    Item { height: 5 }
-
-                    // SELECTION STATE
-                    Text { text: "SELECTION STATE"; color: "#666"; font.pixelSize: 11; font.bold: true }
-                    Text {
-                        text: "Current State: " + (backend.isDiving ? "DIVING" : "GLIDING")
-                        color: backend.isDiving ? "#ff8844" : "#88ff88"; font.pixelSize: 10; width: parent.width; wrapMode: Text.WordWrap
-                    }
-
-                    Item { height: 10 }
-
-                    Text { text: "PRO TIPS & SHORTCUTS"; color: "#666"; font.pixelSize: 11; font.bold: true }
-
-                    Text {
-                        text: "ROI Cancel: Press ROI key or Esc when in selection stages.\nCustom Keybinds: Works with Mouse1-Mouse5 and keyboard keys.\nEngine Settings: All optimizations (Direct Hardware, Smoothing, Shield) are always ON.\nMove HUD in-game: Hold Ctrl then drag the angle box to reposition it."
-                        color: "#aaa"; font.pixelSize: 11; width: parent.width; wrapMode: Text.WordWrap
-                    }
-
-                    Item { height: 10 }
-
-                    // ── AUTO-MANTLE DIAGNOSTICS ─────────────────────────
-                    Rectangle {
-                        width: parent.width; height: 1; color: "#ff4444"
-                    }
-                    Text { text: "AUTO-MANTLE DIAGNOSTICS"; color: "#ff6644"; font.pixelSize: 11; font.bold: true }
-                    Text {
-                        text: "Test one at a time. Toggle ON = that feature is DISABLED. If auto-mantling stops, that toggle is the culprit."
-                        color: "#aa6644"; font.pixelSize: 10; width: parent.width; wrapMode: Text.WordWrap
-                    }
-
-                    // Toggle 1: Raw Input
-                    Rectangle {
-                        width: parent.width; height: diagRawCol.implicitHeight + 16; radius: 6
-                        color: backend.diagNoRawInput ? "#2a1010" : "#101a10"
-                        border.color: backend.diagNoRawInput ? "#ff4444" : "#224422"
-                        border.width: 1
-
-                        Column {
-                            id: diagRawCol
-                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
-                            spacing: 4
-
-                            RowLayout {
-                                width: parent.width
-                                Switch {
-                                    checked: backend.diagNoRawInput
-                                    onCheckedChanged: backend.diagNoRawInput = checked
-                                }
-                                Text {
-                                    text: backend.diagNoRawInput ? "Raw Input Sink: DISABLED" : "Raw Input Sink: Normal"
-                                    color: backend.diagNoRawInput ? "#ff6644" : "#66ff88"
-                                    font.bold: true; font.pixelSize: 12
-                                }
-                            }
-                            Text {
-                                text: "Disables background mouse listener (RegisterRawInputDevices). Mouse tracking will stop."
-                                color: "#777"; font.pixelSize: 9; width: parent.width; wrapMode: Text.WordWrap
-                            }
+                    Card {
+                        SectionHeader { text: "UPDATE CHANNEL" }
+                        DarkSwitch {
+                            text: backend.betaUpdates ? "Beta channel" : "Stable channel"
+                            checked: backend.betaUpdates
+                            onToggled: backend.betaUpdates = checked
                         }
-                    }
-
-                    // Toggle 2: Topmost
-                    Rectangle {
-                        width: parent.width; height: diagTopCol.implicitHeight + 16; radius: 6
-                        color: backend.diagNoTopmost ? "#2a1010" : "#101a10"
-                        border.color: backend.diagNoTopmost ? "#ff4444" : "#224422"
-                        border.width: 1
-
-                        Column {
-                            id: diagTopCol
-                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
-                            spacing: 4
-
-                            RowLayout {
-                                width: parent.width
-                                Switch {
-                                    checked: backend.diagNoTopmost
-                                    onCheckedChanged: backend.diagNoTopmost = checked
-                                }
-                                Text {
-                                    text: backend.diagNoTopmost ? "Topmost Overlay: DISABLED" : "Topmost Overlay: Normal"
-                                    color: backend.diagNoTopmost ? "#ff6644" : "#66ff88"
-                                    font.bold: true; font.pixelSize: 12
-                                }
-                            }
-                            Text {
-                                text: "Removes HWND_TOPMOST from overlay. HUD may go behind Fortnite in fullscreen."
-                                color: "#777"; font.pixelSize: 9; width: parent.width; wrapMode: Text.WordWrap
-                            }
-                        }
-                    }
-
-                    // Toggle 3: Timer
-                    Rectangle {
-                        width: parent.width; height: diagTimerCol.implicitHeight + 16; radius: 6
-                        color: backend.diagNoTimer ? "#2a1010" : "#101a10"
-                        border.color: backend.diagNoTimer ? "#ff4444" : "#224422"
-                        border.width: 1
-
-                        Column {
-                            id: diagTimerCol
-                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
-                            spacing: 4
-
-                            RowLayout {
-                                width: parent.width
-                                Switch {
-                                    checked: backend.diagNoTimer
-                                    onCheckedChanged: backend.diagNoTimer = checked
-                                }
-                                Text {
-                                    text: backend.diagNoTimer ? "1ms Timer: DISABLED" : "1ms Timer: Normal"
-                                    color: backend.diagNoTimer ? "#ff6644" : "#66ff88"
-                                    font.bold: true; font.pixelSize: 12
-                                }
-                            }
-                            Text {
-                                text: "Stops forcing 1ms Windows timer resolution (timeBeginPeriod). Polling may become jittery."
-                                color: "#777"; font.pixelSize: 9; width: parent.width; wrapMode: Text.WordWrap
-                            }
-                        }
-                    }
-
-                    Text {
-                        text: "⚠ Restart BetterAngle after toggling for full effect. Test in Fortnite while gliding."
-                        color: "#ff8844"; font.pixelSize: 10; font.bold: true; width: parent.width; wrapMode: Text.WordWrap
-                    }
-
-                    // ── Beta / Stable Update Channel ──────────────────────
-                    Rectangle {
-                        width: parent.width; height: betaCol.implicitHeight + 16; radius: 6
-                        color: backend.betaUpdates ? "#1a1a00" : "#101a10"
-                        border.color: backend.betaUpdates ? "#ccaa00" : "#224422"
-                        border.width: 1
-
-                        Column {
-                            id: betaCol
-                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
-                            spacing: 4
-
-                            RowLayout {
-                                width: parent.width
-                                Switch {
-                                    checked: backend.betaUpdates
-                                    onCheckedChanged: backend.betaUpdates = checked
-                                }
-                                Text {
-                                    text: backend.betaUpdates ? "Update Channel: BETA" : "Update Channel: Stable"
-                                    color: backend.betaUpdates ? "#ffdd44" : "#66ff88"
-                                    font.bold: true; font.pixelSize: 12
-                                }
-                            }
-                            Text {
-                                text: backend.betaUpdates
-                                    ? "Shows all releases including pre-releases. You may get unstable builds."
-                                    : "Only shows releases graduated to stable via MIN_STABLE_VERSION."
-                                color: "#777"; font.pixelSize: 9; width: parent.width; wrapMode: Text.WordWrap
-                            }
+                        Hint {
+                            text: backend.betaUpdates
+                                  ? "Shows every release including pre-releases. You may get unstable builds."
+                                  : "Only offers releases graduated to stable via MIN_STABLE_VERSION."
                         }
                     }
                 }
             }
         }
-
     }
 }

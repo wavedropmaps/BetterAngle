@@ -6,7 +6,6 @@
 
 class BetterAngleBackend : public QObject {
   Q_OBJECT
-  Q_INVOKABLE void finishBooting();
   Q_PROPERTY(double sensX READ sensX WRITE setSensX NOTIFY profileChanged)
   Q_PROPERTY(double sensY READ sensY WRITE setSensY NOTIFY profileChanged)
   Q_PROPERTY(
@@ -16,9 +15,13 @@ class BetterAngleBackend : public QObject {
   Q_PROPERTY(int screenIndex READ screenIndex WRITE setScreenIndex NOTIFY profileChanged)
   Q_PROPERTY(int hudDecimalPlaces READ hudDecimalPlaces WRITE setHudDecimalPlaces NOTIFY profileChanged)
   Q_PROPERTY(bool atomicShield READ atomicShield WRITE setAtomicShield NOTIFY profileChanged)
-  Q_PROPERTY(bool directHardwareMode READ directHardwareMode WRITE setDirectHardwareMode NOTIFY profileChanged)
-  Q_PROPERTY(bool hudSmoothing READ hudSmoothing WRITE setHudSmoothing NOTIFY profileChanged)
+  // 0 = BlockInput lock during dive/glide transitions, 1 = sensitivity blend
+  Q_PROPERTY(int inputLockMode READ inputLockMode WRITE setInputLockMode NOTIFY profileChanged)
+  Q_PROPERTY(int transitionBlendMs READ transitionBlendMs WRITE setTransitionBlendMs NOTIFY profileChanged)
   Q_PROPERTY(QStringList availableScreens READ availableScreens CONSTANT)
+  Q_PROPERTY(QColor targetColor READ targetColor NOTIFY profileChanged)
+  Q_PROPERTY(int hudX READ hudX NOTIFY debugDataChanged)
+  Q_PROPERTY(int hudY READ hudY NOTIFY debugDataChanged)
 
   Q_PROPERTY(bool crosshairOn READ crosshairOn WRITE setCrosshairOn NOTIFY
                  crosshairChanged)
@@ -69,7 +72,7 @@ class BetterAngleBackend : public QObject {
   Q_PROPERTY(bool ghostMismatch READ ghostMismatch NOTIFY debugDataChanged)
   Q_PROPERTY(QString rawWState READ rawWState NOTIFY debugDataChanged)
   Q_PROPERTY(QString inputLockStatus READ inputLockStatus NOTIFY debugDataChanged)
-  Q_PROPERTY(QString nitroSyncLog READ nitroSyncLog NOTIFY debugDataChanged)
+  Q_PROPERTY(bool angleEstimated READ angleEstimated NOTIFY debugDataChanged)
 
   // Fortnite monitor label (debug tab)
   Q_PROPERTY(QString fortniteMonitorLabel READ fortniteMonitorLabel NOTIFY debugDataChanged)
@@ -114,11 +117,14 @@ public:
   void setHudDecimalPlaces(int v);
   bool atomicShield() const;
   void setAtomicShield(bool v);
-  bool directHardwareMode() const;
-  void setDirectHardwareMode(bool v);
-  bool hudSmoothing() const;
-  void setHudSmoothing(bool v);
+  int inputLockMode() const;
+  void setInputLockMode(int v);
+  int transitionBlendMs() const;
+  void setTransitionBlendMs(int v);
   QStringList availableScreens() const;
+  QColor targetColor() const;
+  int hudX() const;
+  int hudY() const;
 
   bool crosshairOn() const;
   void setCrosshairOn(bool v);
@@ -166,7 +172,7 @@ public:
   bool ghostMismatch() const;
   QString rawWState() const;
   QString inputLockStatus() const;
-  QString nitroSyncLog() const;
+  bool angleEstimated() const;
   Q_INVOKABLE void refreshDebugData();
 
   QString fortniteMonitorLabel() const;

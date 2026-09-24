@@ -32,11 +32,10 @@ legacy_python/
 betterangle_old_python_version/
 GEMINI.md
 
-# Cleanup
-debug.log
+# Local scratch / tooling output
+*.log
+*.patch
+*.tmp
 /scratch/
 /.idea/
-fix_*.patch
-BetterAngle_114.cpp
-Overlay_114.cpp
-NEW_RELEASE_NOTES.md
+CURRENT_RELEASE_NOTES.md

@@ -10,7 +10,6 @@
 #include <windows.h>
 
 
-namespace {
 bool IsFortniteProcessName(const wchar_t *processName) {
   if (!processName || !processName[0])
     return false;
@@ -28,6 +27,7 @@ bool IsFortniteProcessName(const wchar_t *processName) {
   return false;
 }
 
+namespace {
 const wchar_t *GetProcessBaseName(HWND hwnd, wchar_t *buffer,
                                   DWORD bufferCount) {
   if (!hwnd || !buffer || bufferCount == 0)
@@ -69,8 +69,6 @@ const wchar_t *GetProcessBaseName(HWND hwnd, wchar_t *buffer,
   return baseName;
 }
 } // namespace
-
-#include "shared/EnhancedLogging.h"
 
 bool IsFortniteForeground() {
   static HWND s_lastFg = NULL;
@@ -132,8 +130,6 @@ bool IsCursorCurrentlyVisible() {
 
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
-
-static bool g_pollingRunning = false;
 
 // The "Essential 5" - Core Movement Cluster (v5.5.59)
 static const int g_gamingKeys[] = {'W', 'A', 'S', 'D', VK_SPACE};
@@ -211,65 +207,13 @@ int GetRawInputDeltaX(LPARAM lparam) {
     return 0;
 
   RAWINPUT *raw = (RAWINPUT *)lpb.data();
-  if (raw->header.dwType == RIM_TYPEMOUSE) {
+  // Absolute-position devices (tablets, remote desktop, some VMs) report
+  // screen coordinates, not deltas; counting them would jump the angle.
+  if (raw->header.dwType == RIM_TYPEMOUSE &&
+      !(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
     return raw->data.mouse.lLastX;
   }
   return 0;
-}
-
-// Hardware-direct scancode injection (Movement Cluster)
-static const BYTE SCANCODE_W = 0x11;
-static const BYTE SCANCODE_A = 0x1E;
-static const BYTE SCANCODE_S = 0x1F;
-static const BYTE SCANCODE_D = 0x20;
-
-void SendHardwareKey(BYTE scancode, bool pressed) {
-  INPUT input = {};
-  input.type = INPUT_KEYBOARD;
-  input.ki.wScan = scancode;
-  input.ki.wVk = 0;  // Nullify virtual key to signal hardware-origin
-
-  // Use MapVirtualKey as verification layer for regional keyboard compatibility
-  BYTE verifiedScancode = MapVirtualKey(MapVirtualKey(scancode, MAPVK_VSC_TO_VK), MAPVK_VK_TO_VSC);
-  if (verifiedScancode != 0) {
-    input.ki.wScan = verifiedScancode;
-  }
-
-  if (pressed) {
-    input.ki.dwFlags = KEYEVENTF_SCANCODE;
-  } else {
-    input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-  }
-
-  SendInput(1, &input, sizeof(INPUT));
-}
-
-void SendDirectMovement(char direction, bool pressed) {
-  BYTE scancode = 0;
-
-  switch (direction) {
-    case 'W':
-    case 'w':
-      scancode = SCANCODE_W;
-      break;
-    case 'A':
-    case 'a':
-      scancode = SCANCODE_A;
-      break;
-    case 'S':
-    case 's':
-      scancode = SCANCODE_S;
-      break;
-    case 'D':
-    case 'd':
-      scancode = SCANCODE_D;
-      break;
-    default:
-      LOG_ERROR("SendDirectMovement: Invalid direction character");
-      return;
-  }
-
-  SendHardwareKey(scancode, pressed);
 }
 
 // End of Input.cpp

@@ -14,6 +14,7 @@ A high-performance, low-latency angle tracker and FOV detection overlay for Wind
 ## 🛠 Features
 - **Raw Input Tracking**: Captures mouse delta directly from the hardware.
 - **ROI FOV Detector**: Automatically detects game states (Dive/Glide) using high-speed pixel scanning.
+- **Transition Modes**: Choose how dive/glide transitions are handled — *Block input* (exact angle) or *Blend* (never touches your input; angle estimated if you move mid-transition). See [docs/INPUT_LOCK.md](docs/INPUT_LOCK.md).
 - **Transparent Overlay**: Click-through, topmost UI that doesn't interfere with gameplay.
 - **Auto-Updater**: Automatically stays up-to-date with the latest releases from GitHub.
 - **Auto-Installer**: Automatically installs the latest version of the software.
@@ -30,7 +31,13 @@ Check the **[Releases](https://github.com/wavedropmaps-org/BetterAngle/releases)
 
 ## ⚙️ Development
 1. Clone the repository: `git clone https://github.com/wavedropmaps-org/BetterAngle.git`
-2. Open with Visual Studio or compile using `msbuild`.
+2. Install Visual Studio 2022 (MSVC) and Qt 6.5.3 (`win64_msvc2019_64`).
+3. Configure and build with CMake:
+   ```
+   cmake -B build -G "Visual Studio 17 2022" -A x64
+   cmake --build build --config Release
+   ```
+Releases are built by GitHub Actions on every push to `main` (see `PROJECT_POLICY.md`).
 
 ---
 *Created by [Fruss](https://github.com/wavedropmaps) & [MahanYTT](https://github.com/MahanYTT) & [itsdolphin](https://github.com/byu163) with ❤️*

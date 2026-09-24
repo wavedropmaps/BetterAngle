@@ -17,6 +17,6 @@
     - `State.h`
     - `RELEASE_NOTES.md`
 
-## 4. Input Ghosting Protection
-- All FOV transitions must use the "Absolute Restoration" protocol (pre-lock snapshot + force-release).
-- No kernel-level blocking that freezes the Windows Async Key Table without a corresponding restoration pulse.
+## 4. Transition Input Handling
+- Dive/glide transitions support two user-selectable modes: BlockInput (exact angle) and Blend (never touches input). See `docs/INPUT_LOCK.md`.
+- Never inject synthetic keyboard/mouse input into the game, and never install input hooks or drivers. Blend mode exists so the angle stays usable without either.

@@ -1,65 +1,64 @@
 #include "shared/Logic.h"
-#include "shared/State.h"
-#include <atomic>
-#include <string>
+#include <cmath>
 
+AngleLogic::AngleLogic(double sensX) : m_sensX(sensX) {}
 
-AngleLogic::AngleLogic(double sensX)
-    : m_sensX(sensX), m_isDiving(false), m_accumDx(0), m_baseDx(0),
-      m_baseAngle(0.0), m_currentScale(0.00555555 * sensX) {
-  BakeScale();
+double AngleLogic::CurrentMultiplier(ULONGLONG now) const {
+  if (m_blendMs <= 0 || now >= m_blendStart + (ULONGLONG)m_blendMs)
+    return m_blendTo;
+  double t = (double)(now - m_blendStart) / (double)m_blendMs;
+  return m_blendFrom + (m_blendTo - m_blendFrom) * t;
 }
 
-void AngleLogic::Update(int dx) { m_accumDx += dx; }
+void AngleLogic::Update(int dx) {
+  if (dx == 0)
+    return;
+  std::lock_guard<std::mutex> lock(m_mutex);
+  ULONGLONG now = GetTickCount64();
+  if (m_blendMs > 0 && now < m_blendStart + (ULONGLONG)m_blendMs)
+    m_estimated = true;
+  m_angle = Norm360(m_angle + dx * kDegreesPerCount * m_sensX *
+                                  CurrentMultiplier(now));
+}
 
 double AngleLogic::GetAngle() const {
-  double delta = (double)(m_accumDx.load() - m_baseDx.load());
-  return Norm360(m_baseAngle.load() + (delta * m_currentScale.load()));
+  std::lock_guard<std::mutex> lock(m_mutex);
+  return m_angle;
 }
 
 void AngleLogic::SetZero() {
-  m_accumDx = 0;
-  m_baseDx = 0;
-  m_baseAngle = 0.0;
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_angle = 0.0;
+  m_estimated = false;
 }
 
-void AngleLogic::Bake() {
-  m_baseAngle = GetAngle();
-  m_baseDx = m_accumDx.load();
-}
-
-void AngleLogic::LoadProfile(double sensX) {
-  // Before updating sensitivity, bake in the current angle to prevent jumping
-  m_baseAngle = GetAngle();
-  m_baseDx = m_accumDx.load();
+void AngleLogic::SetSensitivity(double sensX) {
+  std::lock_guard<std::mutex> lock(m_mutex);
   m_sensX = sensX;
-  BakeScale();
 }
 
-void AngleLogic::SetDivingState(bool diving) {
-  if (diving == m_isDiving.load())
+void AngleLogic::SetDivingState(bool diving, int blendMs) {
+  std::lock_guard<std::mutex> lock(m_mutex);
+  if (diving == m_isDiving)
     return;
-
-  // Bake in the current angle before switching scales
-  m_baseAngle = GetAngle();
-  m_baseDx = m_accumDx.load();
+  ULONGLONG now = GetTickCount64();
+  // Start from wherever the scale is right now so a reversal mid-blend
+  // doesn't jump.
+  m_blendFrom = CurrentMultiplier(now);
+  m_blendTo = diving ? kDiveMultiplier : 1.0;
+  m_blendStart = now;
+  m_blendMs = blendMs > 0 ? blendMs : 0;
   m_isDiving = diving;
-  BakeScale();
 }
 
-void AngleLogic::BakeScale() {
-  double sens = m_sensX.load();
-  double scale = 0.00555555 * sens;
-  if (m_isDiving.load()) {
-    scale *= 1.0916;
-  }
-  m_currentScale = scale;
+bool AngleLogic::IsEstimated() const {
+  std::lock_guard<std::mutex> lock(m_mutex);
+  return m_estimated;
 }
 
-double AngleLogic::Norm360(double a) const {
-  while (a >= 360.0)
-    a -= 360.0;
-  while (a < 0.0)
+double AngleLogic::Norm360(double a) {
+  a = std::fmod(a, 360.0);
+  if (a < 0.0)
     a += 360.0;
   return a;
 }

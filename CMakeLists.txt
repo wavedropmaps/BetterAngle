@@ -36,4 +36,10 @@ set_target_properties(BetterAngle PROPERTIES LINK_FLAGS "/MANIFESTUAC:\"level='r
 
 target_include_directories(BetterAngle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Sources are UTF-8 without a BOM (degree sign, emoji in string literals).
+# Without /utf-8 MSVC reads them in the system codepage and garbles them.
+if(MSVC)
+  target_compile_options(BetterAngle PRIVATE /utf-8)
+endif()
+
 # Release creation is handled by GitHub Actions workflow, not POST_BUILD

@@ -44,6 +44,26 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
 static BetterAngleBackend *s_backendInstance = nullptr;
 
+// Sliders call their setters on every tick, and each call used to rewrite the
+// profile + settings JSON. Coalesce those writes into one save shortly after
+// the last change. (The exit path in WinMain and the 30s timer also save.)
+static void ScheduleSave() {
+  static QTimer *timer = nullptr;
+  if (!timer) {
+    timer = new QTimer(QCoreApplication::instance());
+    timer->setSingleShot(true);
+    timer->setInterval(400);
+    QObject::connect(timer, &QTimer::timeout, []() {
+      if (!g_allProfiles.empty()) {
+        Profile &p = g_allProfiles[g_selectedProfileIdx];
+        p.Save(GetProfilesPath() + p.name + L".json");
+      }
+      SaveSettings();
+    });
+  }
+  timer->start();
+}
+
 void NotifyBackendCrosshairChanged() {
   if (s_backendInstance) {
     emit s_backendInstance->crosshairChanged();
@@ -109,9 +129,8 @@ void BetterAngleBackend::setSensX(double v) {
   }
   Profile &p = g_allProfiles[g_selectedProfileIdx];
   p.sensitivityX = normalized;
-  g_logic.LoadProfile(p.sensitivityX);
-  p.Save(GetProfilesPath() + p.name + L".json");
-  SaveSettings();
+  g_logic.SetSensitivity(p.sensitivityX);
+  ScheduleSave();
   emit profileChanged();
 }
 
@@ -129,8 +148,7 @@ void BetterAngleBackend::setSensY(double v) {
   }
   Profile &p = g_allProfiles[g_selectedProfileIdx];
   p.sensitivityY = normalized;
-  p.Save(GetProfilesPath() + p.name + L".json");
-  SaveSettings();
+  ScheduleSave();
   emit profileChanged();
 }
 
@@ -144,8 +162,7 @@ void BetterAngleBackend::setTolerance(int v) {
     return;
   Profile &p = g_allProfiles[g_selectedProfileIdx];
   p.tolerance = v;
-  p.Save(GetProfilesPath() + p.name + L".json");
-  SaveSettings();
+  ScheduleSave();
   emit profileChanged();
 }
 
@@ -161,8 +178,7 @@ void BetterAngleBackend::setDiveGlideMatch(double v) {
     v = 1.0;
   Profile &p = g_allProfiles[g_selectedProfileIdx];
   p.diveGlideMatch = (float)v;
-  p.Save(GetProfilesPath() + p.name + L".json");
-  SaveSettings();
+  ScheduleSave();
   emit profileChanged();
 }
 
@@ -173,13 +189,13 @@ int BetterAngleBackend::screenIndex() const {
 }
 
 void BetterAngleBackend::setScreenIndex(int v) {
-  if (v < 0)
+  int monitors = GetSystemMetrics(SM_CMONITORS);
+  if (v < 0 || v >= monitors)
     v = 0;
 
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.screenIndex = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
 
   // Hand the monitor switch to the Win32 thread via the same WM_USER+101 path
@@ -190,13 +206,13 @@ void BetterAngleBackend::setScreenIndex(int v) {
   // ghost-prevention blank, so switching monitors via the dropdown could leave
   // a frozen HUD copy on the old screen. The handler's guard requires
   // g_screenIndex to still hold the OLD value, so we don't pre-set it here; the
-  // profile save above already persists the new value authoritatively.
+  // profile field set above is what gets persisted.
   if (g_hHUD && v != g_screenIndex) {
     PostMessageW(g_hHUD, WM_USER + 101, v, 0);
   } else {
     g_screenIndex = v;
   }
-  SaveSettings();
+  ScheduleSave();
 
   emit profileChanged();
 }
@@ -207,6 +223,13 @@ QStringList BetterAngleBackend::availableScreens() const {
                       reinterpret_cast<LPARAM>(&data));
   return data.names;
 }
+
+QColor BetterAngleBackend::targetColor() const {
+  return QColor(GetRValue(g_targetColor), GetGValue(g_targetColor),
+                GetBValue(g_targetColor));
+}
+int BetterAngleBackend::hudX() const { return g_hudX; }
+int BetterAngleBackend::hudY() const { return g_hudY; }
 
 int BetterAngleBackend::hudDecimalPlaces() const {
   if (g_allProfiles.empty())
@@ -223,10 +246,9 @@ void BetterAngleBackend::setHudDecimalPlaces(int v) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.hudDecimalPlaces = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
   
-  SaveSettings();
+  ScheduleSave();
   emit profileChanged();
 }
 
@@ -242,48 +264,31 @@ void BetterAngleBackend::setAtomicShield(bool v) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.atomicShield = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
 
-  SaveSettings();
+  ScheduleSave();
   emit profileChanged();
 }
 
-bool BetterAngleBackend::directHardwareMode() const {
-  if (g_allProfiles.empty())
-    return g_directHardwareModeEnabled.load();
-  return g_allProfiles[g_selectedProfileIdx].directHardwareMode;
-}
-
-void BetterAngleBackend::setDirectHardwareMode(bool v) {
-  g_directHardwareModeEnabled.store(v, std::memory_order_release);
-
-  if (!g_allProfiles.empty()) {
-    Profile &p = g_allProfiles[g_selectedProfileIdx];
-    p.directHardwareMode = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
-  }
-
-  SaveSettings();
+int BetterAngleBackend::inputLockMode() const { return g_inputLockMode.load(); }
+void BetterAngleBackend::setInputLockMode(int v) {
+  v = (v == kLockModeBlend) ? kLockModeBlend : kLockModeBlockInput;
+  if (v == g_inputLockMode.load())
+    return;
+  g_inputLockMode = v;
+  ScheduleSave();
   emit profileChanged();
 }
 
-bool BetterAngleBackend::hudSmoothing() const {
-  if (g_allProfiles.empty())
-    return g_hudSmoothingEnabled.load();
-  return g_allProfiles[g_selectedProfileIdx].hudSmoothing;
+int BetterAngleBackend::transitionBlendMs() const {
+  return g_transitionBlendMs.load();
 }
-
-void BetterAngleBackend::setHudSmoothing(bool v) {
-  g_hudSmoothingEnabled = v;
-
-  if (!g_allProfiles.empty()) {
-    Profile &p = g_allProfiles[g_selectedProfileIdx];
-    p.hudSmoothing = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
-  }
-
-  SaveSettings();
+void BetterAngleBackend::setTransitionBlendMs(int v) {
+  v = (std::max)(100, (std::min)(2000, v));
+  if (v == g_transitionBlendMs.load())
+    return;
+  g_transitionBlendMs = v;
+  ScheduleSave();
   emit profileChanged();
 }
 
@@ -294,9 +299,8 @@ void BetterAngleBackend::setCrosshairOn(bool v) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.showCrosshair = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
-  SaveSettings();
+  ScheduleSave();
   if (v) Beep(750, 50);
   else Beep(500, 50);
   emit crosshairChanged();
@@ -322,9 +326,8 @@ void BetterAngleBackend::setCrossThickness(float v) {
     if (!g_allProfiles.empty()) {
       Profile &p = g_allProfiles[g_selectedProfileIdx];
       p.crossThickness = v;
-      p.Save(GetProfilesPath() + p.name + L".json");
     }
-    SaveSettings();
+    ScheduleSave();
     emit crosshairChanged();
   }
 }
@@ -336,9 +339,8 @@ void BetterAngleBackend::setCrossOffsetX(float v) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.crossOffsetX = g_crossOffsetX;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
-  SaveSettings();
+  ScheduleSave();
   emit crosshairChanged();
 }
 
@@ -349,9 +351,8 @@ void BetterAngleBackend::setCrossOffsetY(float v) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.crossOffsetY = g_crossOffsetY;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
-  SaveSettings();
+  ScheduleSave();
   emit crosshairChanged();
 }
 
@@ -362,9 +363,8 @@ void BetterAngleBackend::setCrossPulse(bool v) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.crossPulse = v;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
-  SaveSettings();
+  ScheduleSave();
   emit crosshairChanged();
 }
 
@@ -378,9 +378,8 @@ void BetterAngleBackend::setCrossColor(const QColor &c) {
   if (!g_allProfiles.empty()) {
     Profile &p = g_allProfiles[g_selectedProfileIdx];
     p.crossColor = g_crossColor;
-    p.Save(GetProfilesPath() + p.name + L".json");
   }
-  SaveSettings();
+  ScheduleSave();
   emit crosshairChanged();
 }
 
@@ -388,6 +387,7 @@ QString BetterAngleBackend::versionStr() const {
   return QString::fromLatin1(VERSION_STR);
 }
 QString BetterAngleBackend::latestVersion() const {
+  std::lock_guard<std::mutex> lock(g_updateStringsMutex);
   return QString::fromStdString(g_latestVersionOnline);
 }
 bool BetterAngleBackend::updateAvailable() const { return g_updateAvailable; }
@@ -400,6 +400,7 @@ bool BetterAngleBackend::hasCheckedForUpdates() const {
   return g_hasCheckedForUpdates;
 }
 QString BetterAngleBackend::updateHistory() const {
+  std::lock_guard<std::mutex> lock(g_updateStringsMutex);
   return QString::fromStdString(g_updateHistory);
 }
 
@@ -411,10 +412,14 @@ QString BetterAngleBackend::updateStatus() const {
   if (g_isCheckingForUpdates)
     return "Checking for updates...";
   if (g_hasCheckedForUpdates) {
-    if (g_updateHistory.find("Downloaded update was invalid") !=
-        std::string::npos)
+    std::string history;
+    {
+      std::lock_guard<std::mutex> lock(g_updateStringsMutex);
+      history = g_updateHistory;
+    }
+    if (history.find("Downloaded update was invalid") != std::string::npos)
       return "Downloaded update was invalid. Click to retry.";
-    if (g_updateHistory.find("Update check failed") != std::string::npos)
+    if (history.find("Update check failed") != std::string::npos)
       return "Update check failed";
     if (g_updateAvailable)
       return "New update available!";
@@ -448,7 +453,10 @@ void BetterAngleBackend::downloadUpdate() {
     return;
   }
 
-  g_updateHistory.clear();
+  {
+    std::lock_guard<std::mutex> lock(g_updateStringsMutex);
+    g_updateHistory.clear();
+  }
   g_downloadComplete = false;
   emit updateStatusChanged();
   UpdateApp();
@@ -458,33 +466,15 @@ void BetterAngleBackend::requestShowControlPanel() {
   emit showControlPanelRequested();
 }
 
-// Track main window position so the HUD angle readout follows it.
-static int s_lastWinX = INT_MIN;
-static int s_lastWinY = INT_MIN;
-
 void BetterAngleBackend::syncHudToWindow(int x, int y, int w, int h) {
   // Only sync the HUD if the dashboard crosses onto a DIFFERENT monitor.
   // We no longer link their local movement per user request.
   RECT qtRect = {x, y, x + w, y + h};
-  HMONITOR hQtMon = MonitorFromRect(&qtRect, MONITOR_DEFAULTTONEAREST);
-
-  struct FindData { HMONITOR target; int currentIndex; int foundIndex; };
-  FindData data = {hQtMon, 0, -1};
-  EnumDisplayMonitors(NULL, NULL,
-    [](HMONITOR h, HDC, LPRECT, LPARAM dwData) -> BOOL {
-      auto *d = reinterpret_cast<FindData *>(dwData);
-      if (h == d->target) { d->foundIndex = d->currentIndex; return FALSE; }
-      d->currentIndex++;
-      return TRUE;
-    },
-    reinterpret_cast<LPARAM>(&data));
-
-  if (data.foundIndex >= 0 && data.foundIndex != g_screenIndex) {
-    if (g_hHUD) {
-      // Must post message to Win32 thread! Calling SetWindowPos from the Qt background thread
-      // causes severe DWM desyncs and ghost windows.
-      PostMessageW(g_hHUD, WM_USER + 101, data.foundIndex, 0);
-    }
+  int idx = GetMonitorIndex(MonitorFromRect(&qtRect, MONITOR_DEFAULTTONEAREST));
+  if (idx >= 0 && idx != g_screenIndex && g_hHUD) {
+    // Post to the Win32 thread: calling SetWindowPos from here causes DWM
+    // desyncs and ghost windows.
+    PostMessageW(g_hHUD, WM_USER + 101, idx, 0);
   }
 }
 
@@ -1087,17 +1077,14 @@ void BetterAngleBackend::endKeybindAssignment() {
 }
 
 void NotifyBackendUpdateStatusChanged() {
+  // Called from the updater's worker threads. QML bindings must only be
+  // re-evaluated on the GUI thread, so queue the emit there.
   if (s_backendInstance) {
-    emit s_backendInstance->updateStatusChanged();
+    QMetaObject::invokeMethod(
+        s_backendInstance,
+        []() { emit s_backendInstance->updateStatusChanged(); },
+        Qt::QueuedConnection);
   }
-}
-
-static bool IsFortniteExe(const wchar_t *processName) {
-  if (!processName || !processName[0])
-    return false;
-  return (_wcsnicmp(processName, L"FortniteClient-Win64-Shipping", 29) == 0 ||
-          _wcsnicmp(processName, L"FortniteLauncher", 16) == 0 ||
-          _wcsnicmp(processName, L"FortniteClient", 14) == 0);
 }
 
 void BetterAngleBackend::resetHudPosition() {
@@ -1146,22 +1133,12 @@ QString BetterAngleBackend::fortniteMonitorLabel() const {
 
   if (now - s_lastResolve >= 500) {
     s_lastResolve = now;
-    HWND fn = FindWindowW(NULL, L"Fortnite  ");
-    if (!fn) fn = FindWindowW(NULL, L"Fortnite");
-    if (!fn || !IsWindow(fn)) {
+    HWND fn = FindFortniteWindow();
+    if (!fn) {
       s_cachedIdx = -1;
     } else {
-      HMONITOR hMon = MonitorFromWindow(fn, MONITOR_DEFAULTTONEAREST);
-      struct FindData { HMONITOR target; int cur; int found; };
-      FindData fd = {hMon, 0, -1};
-      EnumDisplayMonitors(NULL, NULL,
-        [](HMONITOR h, HDC, LPRECT, LPARAM p) -> BOOL {
-          auto *d = reinterpret_cast<FindData *>(p);
-          if (h == d->target) { d->found = d->cur; return FALSE; }
-          d->cur++;
-          return TRUE;
-        }, reinterpret_cast<LPARAM>(&fd));
-      s_cachedIdx = (fd.found >= 0) ? fd.found : g_screenIndex;
+      int found = GetMonitorIndex(MonitorFromWindow(fn, MONITOR_DEFAULTTONEAREST));
+      s_cachedIdx = (found >= 0) ? found : g_screenIndex;
     }
   }
 
@@ -1173,6 +1150,16 @@ QString BetterAngleBackend::fortniteMonitorLabel() const {
 }
 
 bool BetterAngleBackend::fnRunning() const {
+  // Polled with the rest of the debug data; a full process snapshot is too
+  // expensive to take on every refresh, so cache it for 500ms.
+  static ULONGLONG s_lastCheck = 0;
+  static bool s_running = false;
+  ULONGLONG now = GetTickCount64();
+  if (now - s_lastCheck < 500)
+    return s_running;
+  s_lastCheck = now;
+
+  s_running = false;
   HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (hSnap == INVALID_HANDLE_VALUE)
     return false;
@@ -1180,14 +1167,14 @@ bool BetterAngleBackend::fnRunning() const {
   pe.dwSize = sizeof(pe);
   if (Process32FirstW(hSnap, &pe)) {
     do {
-      if (IsFortniteExe(pe.szExeFile)) {
-        CloseHandle(hSnap);
-        return true;
+      if (IsFortniteProcessName(pe.szExeFile)) {
+        s_running = true;
+        break;
       }
     } while (Process32NextW(hSnap, &pe));
   }
   CloseHandle(hSnap);
-  return false;
+  return s_running;
 }
 
 bool BetterAngleBackend::fnFocused() const { return IsFortniteForeground(); }
@@ -1335,14 +1322,8 @@ QString BetterAngleBackend::inputLockStatus() const {
     return isLocked ? "ACTIVE" : "IDLE";
 }
 
-QString BetterAngleBackend::nitroSyncLog() const {
-  return "Ghosting logic disabled";
-}
-
-void BetterAngleBackend::finishBooting() {
-  if (g_hHUD) {
-    ShowWindow(g_hHUD, SW_SHOW);
-  }
+bool BetterAngleBackend::angleEstimated() const {
+  return g_logic.IsEstimated();
 }
 
 void BetterAngleBackend::setZero() {

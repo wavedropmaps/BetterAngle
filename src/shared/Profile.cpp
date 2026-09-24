@@ -7,6 +7,73 @@
 #include <vector>
 #include <windows.h>
 
+namespace {
+std::wstring Utf8ToWide(const std::string &s) {
+  if (s.empty())
+    return L"";
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), NULL, 0);
+  std::wstring w(n, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+  return w;
+}
+
+std::string WideToUtf8(const std::wstring &w) {
+  if (w.empty())
+    return "";
+  int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), NULL, 0,
+                              NULL, NULL);
+  std::string s(n, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, NULL,
+                      NULL);
+  return s;
+}
+
+// Quote a string for JSON (escapes " and \).
+std::string JsonQuote(const std::wstring &w) {
+  std::string out = "\"";
+  for (char c : WideToUtf8(w)) {
+    if (c == '"' || c == '\\')
+      out += '\\';
+    out += c;
+  }
+  return out + "\"";
+}
+
+// Read the JSON string that opens at content[quotePos] ('"'). Returns the
+// unescaped text and sets `end` to the index of the closing quote.
+std::string ReadJsonString(const std::string &content, size_t quotePos,
+                           size_t &end) {
+  std::string out;
+  size_t i = quotePos + 1;
+  for (; i < content.size() && content[i] != '"'; ++i) {
+    if (content[i] == '\\' && i + 1 < content.size())
+      ++i;
+    out += content[i];
+  }
+  end = i;
+  return out;
+}
+
+// Find `target` outside of any JSON string, starting at `from`.
+size_t FindUnquoted(const std::string &content, char target, size_t from) {
+  bool inString = false;
+  for (size_t i = from; i < content.size(); ++i) {
+    char c = content[i];
+    if (inString) {
+      if (c == '\\')
+        ++i;
+      else if (c == '"')
+        inString = false;
+    } else if (c == '"') {
+      inString = true;
+    } else if (c == target) {
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+} // namespace
+
 bool Profile::Load(const std::wstring &path) {
   std::ifstream f(path, std::ios::binary);
   if (!f.is_open())
@@ -16,41 +83,30 @@ bool Profile::Load(const std::wstring &path) {
   std::string content((std::istreambuf_iterator<char>(f)),
                       std::istreambuf_iterator<char>());
 
-  // Extract name
+  // Extract name (always the first key in the file)
   size_t namePos = content.find("\"name\": \"");
   if (namePos != std::string::npos) {
-    size_t end = content.find("\"", namePos + 9);
-    std::string n = content.substr(namePos + 9, end - (namePos + 9));
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &n[0], (int)n.size(), NULL, 0);
-    name.assign(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &n[0], (int)n.size(), &name[0], size_needed);
+    size_t end;
+    name = Utf8ToWide(ReadJsonString(content, namePos + 8, end));
   }
 
-  // Extract scales
-  auto extractDouble = [&](const std::string &key) -> double {
+  auto hasKey = [&](const std::string &key) {
+    return content.find("\"" + key + "\": ") != std::string::npos;
+  };
+  // Numeric value of "key": <number>, or `def` if the key is missing.
+  auto extractDouble = [&](const std::string &key, double def = 0.0) -> double {
     size_t pos = content.find("\"" + key + "\": ");
     if (pos == std::string::npos)
-      return 0.003;
-    size_t end = content.find_first_of(",}", pos + 3 + key.length());
-    std::string valStr =
-        content.substr(pos + 3 + key.length(), end - (pos + 3 + key.length()));
-    for (char &c : valStr)
-      if (c == ',')
-        c = '.'; // Fix existing comma-polluted files
+      return def;
+    size_t start = pos + 4 + key.length();
+    size_t end = content.find_first_of(",}\n", start);
+    std::string valStr = content.substr(start, end - start);
     std::istringstream iss(valStr);
     iss.imbue(std::locale("C"));
-    double d = 0.003;
-    iss >> d;
+    double d = def;
+    if (!(iss >> d))
+      return def;
     return d;
-  };
-
-  auto extractString = [&](const std::string &key) -> std::string {
-    size_t pos = content.find("\"" + key + "\": \"");
-    if (pos == std::string::npos)
-      return "";
-    size_t end = content.find("\"", pos + 4 + key.length());
-    return content.substr(pos + 4 + key.length(),
-                          end - (pos + 4 + key.length()));
   };
 
   sensitivityX = extractDouble("sensitivityX");
@@ -61,11 +117,6 @@ bool Profile::Load(const std::wstring &path) {
   if (sensitivityY <= 0.0)
     sensitivityY = 0.05;
 
-  fov = (float)extractDouble("fov");
-  resolutionWidth = (int)extractDouble("resolutionWidth");
-  resolutionHeight = (int)extractDouble("resolutionHeight");
-  renderScale = (float)extractDouble("renderScale");
-
   roi_x = (int)extractDouble("roi_x");
   roi_y = (int)extractDouble("roi_y");
   roi_w = (int)extractDouble("roi_w");
@@ -75,41 +126,12 @@ bool Profile::Load(const std::wstring &path) {
   if (tolerance <= 0)
     tolerance = 2;
 
-  if (content.find("\"diveGlideMatch\"") != std::string::npos) {
-    diveGlideMatch = (float)extractDouble("diveGlideMatch");
-  } else {
-    diveGlideMatch = 9.0f;
-  }
-
-  if (content.find("\"screenIndex\"") != std::string::npos) {
-    screenIndex = (int)extractDouble("screenIndex");
-  } else {
-    screenIndex = 0;
-  }
-
-  if (content.find("\"hudDecimalPlaces\"") != std::string::npos) {
-    hudDecimalPlaces = (int)extractDouble("hudDecimalPlaces");
-  } else {
-    hudDecimalPlaces = 2; // Default to 2 for new profiles as requested
-  }
-  
-  if (content.find("\"atomicShield\"") != std::string::npos) {
-    atomicShield = extractDouble("atomicShield") > 0.5;
-  } else {
-    atomicShield = true;
-  }
-
-  if (content.find("\"directHardwareMode\"") != std::string::npos) {
-    directHardwareMode = extractDouble("directHardwareMode") > 0.5;
-  } else {
-    directHardwareMode = false;
-  }
-
-  if (content.find("\"hudSmoothing\"") != std::string::npos) {
-    hudSmoothing = extractDouble("hudSmoothing") > 0.5;
-  } else {
-    hudSmoothing = true;
-  }
+  diveGlideMatch = (float)extractDouble("diveGlideMatch", 9.0);
+  screenIndex = (int)extractDouble("screenIndex", 0);
+  hudDecimalPlaces = (int)extractDouble("hudDecimalPlaces", 2);
+  if (hudDecimalPlaces < 1 || hudDecimalPlaces > 2)
+    hudDecimalPlaces = 2;
+  atomicShield = extractDouble("atomicShield", 1.0) > 0.5;
 
   // Load Keybinds
   keybinds.toggleMod = (UINT)extractDouble("kb_toggleMod");
@@ -144,27 +166,24 @@ bool Profile::Load(const std::wstring &path) {
   if (crossThickness < 1.0f)
     crossThickness = 1.0f;
 
-  crossColor = (COLORREF)extractDouble("crossColor");
-  if (crossColor == 0)
-    crossColor = RGB(255, 0, 0); // Default Red
+  // Black (0) is a valid colour; only default when the key is missing.
+  crossColor = (COLORREF)extractDouble("crossColor", RGB(255, 0, 0));
   crossOffsetX = (float)extractDouble("crossOffsetX");
   crossOffsetY = (float)extractDouble("crossOffsetY");
   crossAngle = (float)extractDouble("crossAngle");
   bool pulseVal = extractDouble("crossPulse") > 0.5;
   crossPulse = pulseVal;
-  showCrosshair = extractDouble("showCrosshair") > 0.5;
-  if (content.find("\"showCrosshair\"") == std::string::npos)
-    showCrosshair = true;
+  showCrosshair = extractDouble("showCrosshair", 1.0) > 0.5;
 
   // Load Presets Array (Manual Parser)
   crosshairPresets.clear();
   size_t arrPos = content.find("\"crosshairPresets\": [");
   if (arrPos != std::string::npos) {
-    size_t endArr = content.find("]", arrPos);
-    std::string arrContent = content.substr(arrPos, endArr - arrPos);
+    size_t endArr = FindUnquoted(content, ']', arrPos + 20);
+    std::string arrContent = content.substr(arrPos + 20, endArr - arrPos - 20);
     size_t objPos = 0;
-    while ((objPos = arrContent.find("{", objPos)) != std::string::npos) {
-      size_t objEnd = arrContent.find("}", objPos);
+    while ((objPos = FindUnquoted(arrContent, '{', objPos)) != std::string::npos) {
+      size_t objEnd = FindUnquoted(arrContent, '}', objPos);
       if (objEnd == std::string::npos)
         break;
       std::string obj = arrContent.substr(objPos, objEnd - objPos);
@@ -173,11 +192,8 @@ bool Profile::Load(const std::wstring &path) {
       // Parse name
       size_t nP = obj.find("\"name\": \"");
       if (nP != std::string::npos) {
-        size_t nE = obj.find("\"", nP + 9);
-        std::string nStr = obj.substr(nP + 9, nE - (nP + 9));
-        int size_needed = MultiByteToWideChar(CP_UTF8, 0, &nStr[0], (int)nStr.size(), NULL, 0);
-        cp.name.assign(size_needed, 0);
-        MultiByteToWideChar(CP_UTF8, 0, &nStr[0], (int)nStr.size(), &cp.name[0], size_needed);
+        size_t nE;
+        cp.name = Utf8ToWide(ReadJsonString(obj, nP + 8, nE));
       }
       // Parse coords
       auto exD = [&](std::string k) -> float {
@@ -192,9 +208,9 @@ bool Profile::Load(const std::wstring &path) {
       cp.thickness = exD("t");
       if (cp.thickness < 1.0f)
         cp.thickness = 1.0f;
-      cp.color = (COLORREF)exD("c");
-      if (cp.color == 0)
-        cp.color = RGB(255, 0, 0);
+      cp.color = obj.find("\"c\": ") != std::string::npos
+                     ? (COLORREF)exD("c")
+                     : RGB(255, 0, 0);
       cp.pulse = exD("p") > 0.5f;
       crosshairPresets.push_back(cp);
       objPos = objEnd + 1;
@@ -214,34 +230,14 @@ bool Profile::Load(const std::wstring &path) {
 bool Profile::Save(const std::wstring &path) {
   std::wstring tempPath = path + L".tmp";
 
-  // Ensure file is not hidden before writing to avoid permission issues
-  SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
-
-  // Use narrow ofstream for consistent UTF-8 behavior
-  std::ofstream f(tempPath, std::ios::trunc);
-  if (!f.is_open())
-    return false;
-
   // Use a stringstream with C locale for consistent decimal points
   std::stringstream ss;
   ss.imbue(std::locale("C"));
 
-  auto toUtf8 = [](const std::wstring &wstr) -> std::string {
-    if (wstr.empty()) return "";
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
-    std::string strTo(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
-    return strTo;
-  };
-
   ss << "{\n";
-  ss << "  \"name\": \"" << toUtf8(name) << "\",\n";
+  ss << "  \"name\": " << JsonQuote(name) << ",\n";
   ss << "  \"sensitivityX\": " << sensitivityX << ",\n";
   ss << "  \"sensitivityY\": " << sensitivityY << ",\n";
-  ss << "  \"fov\": " << fov << ",\n";
-  ss << "  \"resolutionWidth\": " << resolutionWidth << ",\n";
-  ss << "  \"resolutionHeight\": " << resolutionHeight << ",\n";
-  ss << "  \"renderScale\": " << renderScale << ",\n";
   ss << "  \"roi_x\": " << roi_x << ",\n";
   ss << "  \"roi_y\": " << roi_y << ",\n";
   ss << "  \"roi_w\": " << roi_w << ",\n";
@@ -252,8 +248,6 @@ bool Profile::Save(const std::wstring &path) {
   ss << "  \"screenIndex\": " << screenIndex << ",\n";
   ss << "  \"hudDecimalPlaces\": " << hudDecimalPlaces << ",\n";
   ss << "  \"atomicShield\": " << (atomicShield ? 1 : 0) << ",\n";
-  ss << "  \"directHardwareMode\": " << (directHardwareMode ? 1 : 0) << ",\n";
-  ss << "  \"hudSmoothing\": " << (hudSmoothing ? 1 : 0) << ",\n";
   ss << "  \"kb_toggleMod\": " << keybinds.toggleMod << ",\n";
   ss << "  \"kb_toggleKey\": " << keybinds.toggleKey << ",\n";
   ss << "  \"kb_roiMod\": " << keybinds.roiMod << ",\n";
@@ -274,7 +268,7 @@ bool Profile::Save(const std::wstring &path) {
   ss << "  \"crosshairPresets\": [\n";
   for (size_t i = 0; i < crosshairPresets.size(); i++) {
     const auto &cp = crosshairPresets[i];
-    ss << "    {\"name\": \"" << toUtf8(cp.name) << "\", \"x\": " << cp.offsetX
+    ss << "    {\"name\": " << JsonQuote(cp.name) << ", \"x\": " << cp.offsetX
        << ", \"y\": " << cp.offsetY << ", \"a\": " << cp.angle
        << ", \"t\": " << cp.thickness << ", \"c\": "
        << (unsigned long)cp.color << ", \"p\": " << (cp.pulse ? 1 : 0)
@@ -286,15 +280,22 @@ bool Profile::Save(const std::wstring &path) {
   ss << "  ]\n";
   ss << "}";
 
-  f << ss.str();
-  f.close();
+  {
+    std::ofstream f(tempPath, std::ios::trunc);
+    if (!f.is_open())
+      return false;
+    f << ss.str();
+    if (!f.good())
+      return false;
+  }
 
-  // Atomic swap
-  DeleteFileW(path.c_str());
-  MoveFileW(tempPath.c_str(), path.c_str());
-
+  // Hidden files can't be replaced by MoveFileEx; clear the flag first.
+  SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+  // Single replace step: a crash can never leave us without the profile.
+  bool ok = MoveFileExW(tempPath.c_str(), path.c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
   SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_HIDDEN);
-  return true;
+  return ok;
 }
 
 std::vector<Profile> GetProfiles(const std::wstring &directory) {
@@ -305,7 +306,11 @@ std::vector<Profile> GetProfiles(const std::wstring &directory) {
 
   if (hFind != INVALID_HANDLE_VALUE) {
     do {
-      if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+      // last_calibrated.json is a backup copy of the active profile; loading
+      // it would list that profile twice.
+      if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+          _wcsicmp(findData.cFileName, L"last_calibrated.json") != 0 &&
+          _wcsicmp(findData.cFileName, L"settings.json") != 0) {
         Profile p;
         if (p.Load(directory + findData.cFileName)) {
           profiles.push_back(p);

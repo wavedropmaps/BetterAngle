@@ -19,7 +19,17 @@ const wchar_t *MIN_STABLE_URL =
 const wchar_t *DOWNLOAD_URL = L"https://github.com/wavedropmaps-org/BetterAngle/"
                               L"releases/latest/download/BetterAngle_Setup.exe";
 
+static DWORD HttpStatus(HINTERNET hUrl) {
+  DWORD status = 0, len = sizeof(status);
+  if (!HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,
+                      &status, &len, NULL))
+    return 0;
+  return status;
+}
+
 // Fetch a small text body into a std::string (no temp file needed).
+// Returns "" on any failure, including non-200 responses: an error page body
+// like "404: Not Found" must never be mistaken for real data.
 static std::string FetchString(const wchar_t *url) {
   HINTERNET hNet = InternetOpenW(L"BetterAngle/" VERSION_WSTR,
                                  INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
@@ -30,9 +40,11 @@ static std::string FetchString(const wchar_t *url) {
                                     INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE, 0);
   std::string out;
   if (hUrl) {
-    char buf[8192]; DWORD n;
-    while (InternetReadFile(hUrl, buf, sizeof(buf), &n) && n > 0)
-      out.append(buf, n);
+    if (HttpStatus(hUrl) == 200) {
+      char buf[8192]; DWORD n;
+      while (InternetReadFile(hUrl, buf, sizeof(buf), &n) && n > 0)
+        out.append(buf, n);
+    }
     InternetCloseHandle(hUrl);
   }
   InternetCloseHandle(hNet);
@@ -57,7 +69,10 @@ static int CompareVersions(const std::string &a, const std::string &b) {
   return 0;
 }
 
-bool DownloadFile(const std::wstring &url, const std::wstring &dest) {
+// Download url to dest. Fails (and returns false) on a non-200 response, a
+// read or write error, or a body shorter than the server's Content-Length --
+// a truncated installer must never be run.
+static bool DownloadFile(const std::wstring &url, const std::wstring &dest) {
   HINTERNET hInternet =
       InternetOpenW(L"BetterAngle", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
   if (!hInternet)
@@ -75,27 +90,48 @@ bool DownloadFile(const std::wstring &url, const std::wstring &dest) {
     return false;
   }
 
-  std::ofstream ofs(dest, std::ios::binary);
-  if (!ofs.is_open()) {
-    InternetCloseHandle(hUrl);
-    InternetCloseHandle(hInternet);
-    return false;
+  bool ok = HttpStatus(hUrl) == 200;
+  DWORD expected = 0, len = sizeof(expected);
+  bool haveLength = HttpQueryInfoW(
+      hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &expected,
+      &len, NULL);
+
+  unsigned long long total = 0;
+  if (ok) {
+    std::ofstream ofs(dest, std::ios::binary | std::ios::trunc);
+    ok = ofs.is_open();
+    char buffer[8192];
+    while (ok) {
+      DWORD bytesRead = 0;
+      if (!InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead)) {
+        ok = false; // connection dropped mid-download
+        break;
+      }
+      if (bytesRead == 0)
+        break; // end of body
+      ofs.write(buffer, bytesRead);
+      ok = ofs.good();
+      total += bytesRead;
+    }
   }
 
-  char buffer[8192];
-  DWORD bytesRead;
-  while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) &&
-         bytesRead > 0) {
-    ofs.write(buffer, bytesRead);
-  }
-
-  ofs.close();
   InternetCloseHandle(hUrl);
   InternetCloseHandle(hInternet);
-  return true;
+
+  if (ok && haveLength && total != expected)
+    ok = false;
+  if (!ok)
+    DeleteFileW(dest.c_str());
+  return ok;
 }
 
+// Guarded by g_updateStringsMutex along with the other updater strings.
 static std::wstring g_dynamicDownloadUrl = DOWNLOAD_URL;
+
+static void SetUpdateHistory(const std::string &text) {
+  std::lock_guard<std::mutex> lock(g_updateStringsMutex);
+  g_updateHistory = text;
+}
 
 static bool IsLikelyWindowsExecutable(const std::wstring &path) {
   std::ifstream ifs(path, std::ios::binary);
@@ -163,7 +199,7 @@ bool CheckForUpdates() {
   std::string json = FetchString(endpoint);
   if (json.empty()) {
     g_hasCheckedForUpdates = true;
-    g_updateHistory = "Update check failed. Check your internet connection.";
+    SetUpdateHistory("Update check failed. Check your internet connection.");
     return false;
   }
 
@@ -171,12 +207,15 @@ bool CheckForUpdates() {
   std::wstring dlUrl;
   if (!ParseReleasesJson(json, latestTag, dlUrl)) {
     g_hasCheckedForUpdates = true;
-    g_updateHistory = "Update check failed — could not parse release info.";
+    SetUpdateHistory("Update check failed - could not parse release info.");
     return false;
   }
 
-  g_latestVersionOnline = latestTag;
-  if (!dlUrl.empty()) g_dynamicDownloadUrl = dlUrl;
+  {
+    std::lock_guard<std::mutex> lock(g_updateStringsMutex);
+    g_latestVersionOnline = latestTag;
+    if (!dlUrl.empty()) g_dynamicDownloadUrl = dlUrl;
+  }
 
   std::string currentVer = VERSION_STR;
 
@@ -193,7 +232,7 @@ bool CheckForUpdates() {
     if (!minStableRaw.empty() && CompareVersions(latestTag, minStableRaw) < 0) {
       // Latest release hasn't been graduated yet — stay quiet.
       g_updateAvailable = false;
-      g_updateHistory = "You're up to date (stable channel).";
+      SetUpdateHistory("You're up to date (stable channel).");
       g_hasCheckedForUpdates = true;
       return false;
     }
@@ -201,12 +240,12 @@ bool CheckForUpdates() {
 
   if (CompareVersions(latestTag, currentVer) > 0) {
     g_updateAvailable = true;
-    g_updateHistory = "New version available: " + latestTag +
-                      (beta ? " [beta channel]" : "");
+    SetUpdateHistory("New version available: " + latestTag +
+                     (beta ? " [beta channel]" : ""));
   } else {
     g_updateAvailable = false;
-    g_updateHistory = std::string("Up to date (v") + currentVer + ")" +
-                      (beta ? " [beta channel]" : "");
+    SetUpdateHistory(std::string("Up to date (v") + currentVer + ")" +
+                     (beta ? " [beta channel]" : ""));
   }
 
   g_hasCheckedForUpdates = true;
@@ -218,7 +257,11 @@ void UpdateApp() {
     return;
 
   g_isDownloadingUpdate = true;
-  std::wstring downloadUrl = g_dynamicDownloadUrl; // capture before thread spawn
+  std::wstring downloadUrl;
+  {
+    std::lock_guard<std::mutex> lock(g_updateStringsMutex);
+    downloadUrl = g_dynamicDownloadUrl; // capture before thread spawn
+  }
   std::thread([downloadUrl]() {
     std::wstring dest = GetAppRootPath() + L"BetterAngle_Setup_update.exe";
     if (DownloadFile(downloadUrl, dest) &&
@@ -228,9 +271,10 @@ void UpdateApp() {
       DeleteFileW(dest.c_str());
       g_downloadComplete = false;
       g_updateAvailable = true;
-      g_updateHistory = "Downloaded update was invalid";
+      SetUpdateHistory("Downloaded update was invalid");
     }
     g_isDownloadingUpdate = false;
+    NotifyBackendUpdateStatusChanged();
   }).detach();
 }
 
@@ -281,12 +325,12 @@ void ApplyUpdateAndRestart() {
       L"$app = '" +
       currentExeEsc +
       L"'; "
-      L"$args = '" +
+      L"$installArgs = '" +
       paramsEsc +
       L"'; "
       L"Start-Sleep -Seconds 2; "
       L"try { "
-      L"$p = Start-Process -FilePath $installer -ArgumentList $args -Verb "
+      L"$p = Start-Process -FilePath $installer -ArgumentList $installArgs -Verb "
       L"RunAs -PassThru -Wait; "
       L"if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $app)) { "
       L"Start-Sleep -Seconds 2; Start-Process -FilePath $app -WorkingDirectory "
@@ -315,5 +359,6 @@ void ApplyUpdateAndRestart() {
     return;
   }
 
+  SaveSettings();
   exit(0);
 }

@@ -29,30 +29,37 @@ std::wstring GetProfilesPath();
 extern std::atomic<long long> g_detectionDelayMs;
 extern std::atomic<bool> g_showDebugOverlay;
 extern std::atomic<int>
-    g_lockTriggerReason; // 0=None,1=Glide?Dive,2=Dive?Glide,3=Alt-Tab
+    g_lockTriggerReason; // 0=None,1=Glide->Dive,2=Dive->Glide,3=Alt-Tab
 extern std::atomic<int> g_scannerCpuPct;
 extern std::atomic<bool> g_physicalKeys[256];
 extern std::atomic<bool> g_running;
 extern int g_screenIndex;
 extern std::atomic<int> g_displayChangeGen;
 extern std::atomic<int> g_hudDecimalPlaces;
-extern std::atomic<bool> g_hudSmoothingEnabled;
-extern std::atomic<float> g_interpolatedAngle;
 extern std::atomic<bool> g_fortniteFocusedCache;
 extern std::atomic<bool> g_atomicShieldEnabled;
-extern std::atomic<bool> g_directHardwareModeEnabled;
 extern std::atomic<ULONGLONG> g_lastValidMatchTime;
-extern std::atomic<int> g_lockCount;
+extern std::atomic<int> g_lockCount; // dive/glide transitions + alt-tab returns
 extern std::atomic<bool> g_blockInputActive;
 extern std::atomic<ULONGLONG> g_lastLockTime;
+
+// Transition input handling (see DetectorThread / WinEventProc).
+//   kLockModeBlockInput: freeze all input with BlockInput for the transition.
+//     Exact angle, but a key released mid-lock is lost (ghost walking).
+//   kLockModeBlend: never touch input; ease the angle scale across the
+//     transition instead. Movement always works; the angle is estimated if
+//     the mouse moves during the transition.
+enum : int { kLockModeBlockInput = 0, kLockModeBlend = 1 };
+extern std::atomic<int> g_inputLockMode;
+extern std::atomic<int> g_transitionBlendMs; // blend duration in blend mode
+// Mouse deltas are ignored until this tick (blend-mode alt-tab cooldown).
+extern std::atomic<ULONGLONG> g_ignoreMouseUntil;
 
 // Diagnostics
 extern std::atomic<bool> g_diagNoRawInput;
 extern std::atomic<bool> g_diagNoTopmost;
 extern std::atomic<bool> g_diagNoTimer;
 extern std::atomic<bool> g_betaUpdates;
-
-extern std::string g_lastVersionRun;
 
 // Mouse button keybind tracking for polling-based hotkey detection
 extern std::atomic<UINT> g_mouseButtonKeybinds[6]; // Index 0 unused, 1-4 for toggle/roi/cross/zero, 5 unused
@@ -70,7 +77,6 @@ extern std::atomic<UINT> g_mouseButtonModifiers[6];
   APP_WSTR_Y(V_MAJ) L"." APP_WSTR_Y(V_MIN) L"." APP_WSTR_Y(V_PAT)
 
 // Global Profile Management
-extern Profile g_currentProfile;
 extern std::vector<Profile> g_allProfiles;
 extern int g_selectedProfileIdx;
 extern std::wstring g_lastLoadedProfileName;
@@ -82,14 +88,16 @@ extern std::atomic<bool> g_isSelectionActive;
 extern HBITMAP g_screenSnapshot;
 extern bool g_isDiving;
 extern bool g_showROIBox;
-extern int g_currentTab;
-extern std::wstring g_latestName;
-extern bool g_isCheckingForUpdates;
-extern bool g_hasCheckedForUpdates;
-extern bool g_updateAvailable;
-extern bool g_isDownloadingUpdate;
-extern bool g_downloadComplete;
-extern std::string g_updateHistory; // e.g. "v4.20.1 ? v4.20.55"
+extern std::atomic<bool> g_isCheckingForUpdates;
+extern std::atomic<bool> g_hasCheckedForUpdates;
+extern std::atomic<bool> g_updateAvailable;
+extern std::atomic<bool> g_isDownloadingUpdate;
+extern std::atomic<bool> g_downloadComplete;
+// Strings written by the updater threads and read by the UI. Hold
+// g_updateStringsMutex for every access.
+extern std::mutex g_updateStringsMutex;
+extern std::string g_updateHistory; // e.g. "v4.20.1 -> v4.20.55"
+extern std::string g_latestVersionOnline;
 
 // Keybinds struct moved to Profile.h (v4.20.37)
 void LoadSettings();
@@ -105,14 +113,11 @@ extern bool g_crossPulse;
 
 extern COLORREF g_targetColor;
 extern COLORREF g_pickedColor;
-extern float g_latestVersion;
 extern std::atomic<int> g_matchCount;
 extern std::atomic<int> g_peakMatchCount;
 extern std::atomic<int> g_requiredMatchCount;
-extern float g_updateSpinAngle;
 extern RECT g_selectionRect;
 extern POINT g_startPoint;
-extern std::string g_latestVersionOnline;
 extern float g_currentAngle;
 extern std::atomic<bool> g_isCursorVisible;
 extern AngleLogic g_logic;
@@ -133,6 +138,12 @@ extern std::atomic<bool> g_keybindAssignmentActive;
 void NotifyBackendCrosshairChanged();
 void NotifyBackendUpdateStatusChanged();
 
+// Monitor helpers. Indices follow EnumDisplayMonitors order.
+// GetMonitorRectByIndex falls back to the primary monitor when the index no
+// longer exists (e.g. the saved monitor was unplugged).
 RECT GetMonitorRectByIndex(int index);
+int GetMonitorIndex(HMONITOR monitor); // -1 if not found
+// Fortnite's main window, or NULL if it isn't running.
+HWND FindFortniteWindow();
 
 #endif // STATE_H
