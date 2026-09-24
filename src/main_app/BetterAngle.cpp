@@ -32,16 +32,28 @@
 using namespace Gdiplus;
 
 void PerformanceMonitorThread();
-#include "shared/State.h"
 
-// Global State
 // Global handles defined in State.h/cpp
 ULONG_PTR g_gdiplusToken;
 FovDetector g_detector;
 
-
-
 HWINEVENTHOOK g_hWinEventHook = NULL;
+
+// Freeze all keyboard + mouse input for `ms` on a background thread (so the
+// Qt UI pump never stalls). Only used in kLockModeBlockInput.
+static void StartInputLock(DWORD ms, const char *what) {
+  std::thread([ms, what]() {
+    g_blockInputActive = true;
+    BlockInput(TRUE);
+    Sleep(ms);
+    BlockInput(FALSE);
+    g_blockInputActive = false;
+    if (g_running.load()) {
+      g_lastLockTime = GetTickCount64();
+      LOG_INFO("%s: %lums BlockInput", what, ms);
+    }
+  }).detach();
+}
 
 void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
                            LONG idObject, LONG idChild, DWORD dwEventThread,
@@ -62,10 +74,17 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
       g_lockTriggerReason = 3; // Alt-Tab Return
       g_lockCount++;
 
-      // Preserve angle - snapshot the current value so queued deltas don't apply
-      g_logic.Bake();
+      // For 300ms after returning to Fortnite the game is still re-capturing
+      // the mouse, so movement then shouldn't count toward the angle.
+      // BlockInput mode freezes input outright; blend mode leaves input alone
+      // and just ignores our own copy of the deltas.
+      const DWORD kAltTabCooldownMs = 300;
+      if (g_inputLockMode.load() == kLockModeBlend) {
+        g_ignoreMouseUntil = GetTickCount64() + kAltTabCooldownMs;
+      } else if (!g_blockInputActive.load()) {
+        StartInputLock(kAltTabCooldownMs, "Alt-tab return");
+      }
 
-      // NOW safe to update the cache.
       g_fortniteFocusedCache = currentFortniteFocused;
 
       // Re-assert TOPMOST so the overlay doesn't stay hidden behind Fortnite
@@ -74,15 +93,6 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hwnd,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
       }
 
-      // Run BlockInput on a detached thread so it doesn't freeze the Qt UI pump
-      std::thread([]() {
-        g_blockInputActive = true;
-        BlockInput(TRUE);
-        Sleep(300);
-        BlockInput(FALSE);
-        g_blockInputActive = false;
-        if (g_running.load()) LOG_INFO("Alt-tab cooldown active (300ms BlockInput)");
-      }).detach();
     } else {
       g_fortniteFocusedCache = currentFortniteFocused;
     }
@@ -116,12 +126,11 @@ void DetectorThread() {
   while (g_running) {
     if (!g_allProfiles.empty() && !g_isSelectionActive.load()) {
       Profile &p = g_allProfiles[g_selectedProfileIdx];
-      g_logic.LoadProfile(p.sensitivityX);
-      g_requiredMatchCount =
-          (int)((p.diveGlideMatch / 100.0f) * (p.roi_w * p.roi_h));
+      g_logic.SetSensitivity(p.sensitivityX);
+      int roiArea = p.roi_w * p.roi_h;
+      g_requiredMatchCount = (int)((p.diveGlideMatch / 100.0f) * roiArea);
       g_hudDecimalPlaces = p.hudDecimalPlaces;
       g_atomicShieldEnabled = p.atomicShield;
-      g_directHardwareModeEnabled = p.directHardwareMode;
 
       bool currentFortniteFocused = g_fortniteFocusedCache.load();
       g_isCursorVisible = IsCursorCurrentlyVisible();
@@ -173,61 +182,44 @@ void DetectorThread() {
         g_scannerCpuPct = 0;
       }
 
-      bool scanMatch = (g_matchCount.load() >= g_requiredMatchCount.load());
-      bool shielded = g_atomicShieldEnabled.load() &&
-                      (GetTickCount64() - g_lastValidMatchTime.load() < 25);
-      bool nowDiving = scanMatch || shielded;
+      // Only react to dive/glide changes while Fortnite is focused. When it
+      // isn't, the scan is skipped and the match count forced to 0, which
+      // would otherwise look like a dive->glide change and lock input in
+      // whatever app the user just switched to.
+      if (currentFortniteFocused) {
+        // No ROI configured yet: requiredMatchCount is 0, so any match count
+        // (including 0) would read as "diving". Treat that as gliding.
+        bool scanMatch = roiArea > 0 && g_requiredMatchCount.load() > 0 &&
+                         g_matchCount.load() >= g_requiredMatchCount.load();
+        bool shielded = g_atomicShieldEnabled.load() &&
+                        (GetTickCount64() - g_lastValidMatchTime.load() < 25);
+        bool nowDiving = scanMatch || shielded;
 
-      // FOV Transition Locking: BlockInput during glide<->dive changes
-      // to prevent mouse movement from corrupting the angle during the
-      // sensitivity scale switch.
-      if (!g_blockInputActive.load()) {
-        // Edge: Gliding -> Diving
-        if (nowDiving && !lastDiving &&
-            (GetTickCount64() - g_lastLockTime > 500)) {
-          g_lastLockTime = GetTickCount64();
-          g_lockTriggerReason = 1; // Glide -> Dive
+        if (nowDiving != lastDiving) {
+          g_lockTriggerReason = nowDiving ? 1 : 2; // 1 Glide->Dive, 2 Dive->Glide
           g_lockCount++;
-          g_logic.Bake();
 
-          std::thread([]() {
-            g_blockInputActive = true;
-            BlockInput(TRUE);
-            Sleep(700);
-            BlockInput(FALSE);
-            g_blockInputActive = false;
-            if (g_running.load()) {
-              g_lastLockTime = GetTickCount64();
-              LOG_INFO("Transition: glide->dive, 700ms BlockInput");
-            }
-          }).detach();
+          // The game's FOV (and so turn rate) changes over ~700ms. Either
+          // freeze input so nothing moves during it (exact angle, but can
+          // drop key releases), or leave input alone and ease our scale
+          // across the same window (movement never breaks; angle estimated
+          // if the mouse moves mid-transition).
+          const DWORD kTransitionLockMs = 700;
+          bool blendMode = g_inputLockMode.load() == kLockModeBlend;
+          if (!blendMode && !g_blockInputActive.load() &&
+              GetTickCount64() - g_lastLockTime > 500) {
+            g_lastLockTime = GetTickCount64();
+            StartInputLock(kTransitionLockMs, nowDiving
+                                                  ? "Transition glide->dive"
+                                                  : "Transition dive->glide");
+          }
+          g_logic.SetDivingState(nowDiving,
+                                 blendMode ? g_transitionBlendMs.load() : 0);
         }
 
-        // Edge: Diving -> Gliding
-        if (!nowDiving && lastDiving &&
-            (GetTickCount64() - g_lastLockTime > 500)) {
-          g_lastLockTime = GetTickCount64();
-          g_lockTriggerReason = 2; // Dive -> Glide
-          g_lockCount++;
-          g_logic.Bake();
-
-          std::thread([]() {
-            g_blockInputActive = true;
-            BlockInput(TRUE);
-            Sleep(700);
-            BlockInput(FALSE);
-            g_blockInputActive = false;
-            if (g_running.load()) {
-              g_lastLockTime = GetTickCount64();
-              LOG_INFO("Transition: dive->glide, 700ms BlockInput");
-            }
-          }).detach();
-        }
+        lastDiving = nowDiving;
+        g_isDiving = nowDiving;
       }
-
-      lastDiving = nowDiving;
-      g_isDiving = nowDiving;
-      g_logic.SetDivingState(nowDiving);
     }
 
     // Throttle the loop instead of busy-spinning. Back-to-back scans (or a
@@ -458,29 +450,18 @@ bool RefreshHotkeys(HWND hWnd, bool force) {
 LRESULT CALLBACK MsgWndProc(HWND hWnd, UINT message, WPARAM wParam,
                             LPARAM lParam) {
   if (message == WM_INPUT) {
-    UINT dwSize;
-    GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &dwSize,
-                    sizeof(RAWINPUTHEADER));
-    if (dwSize > 0) {
-      std::vector<BYTE> lpb(dwSize);
-      if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb.data(), &dwSize,
-                          sizeof(RAWINPUTHEADER)) == dwSize) {
-        RAWINPUT *raw = (RAWINPUT *)lpb.data();
-        if (raw->header.dwType == RIM_TYPEKEYBOARD) {
-          // Keyboard events are no longer tracked for anti-ghosting
-        }
-      }
-    }
-
     int dx = GetRawInputDeltaX(lParam);
 
     const bool allowAngleUpdate =
-        (g_fortniteFocusedCache && !g_isCursorVisible && !g_blockInputActive.load());
+        g_fortniteFocusedCache && !g_isCursorVisible &&
+        !g_blockInputActive.load() &&
+        GetTickCount64() >= g_ignoreMouseUntil.load();
 
     if (allowAngleUpdate) {
       g_logic.Update(dx);
     }
-    return 0;
+    // Raw input must still reach DefWindowProc so the system can free the
+    // input buffer (WM_INPUT docs).
   }
   return DefWindowProc(hWnd, message, wParam, lParam);
 }
@@ -683,21 +664,12 @@ LRESULT CALLBACK HUDWndProc(HWND hWnd, UINT message, WPARAM wParam,
       g_selectionRect = {cur.x, cur.y, cur.x, cur.y};
 
       // Auto-detect monitor from start point to ensure offsets are correct
-      HMONITOR hMon = MonitorFromPoint(cur, MONITOR_DEFAULTTONEAREST);
-      MONITORINFO mi = {sizeof(mi)};
-      if (GetMonitorInfo(hMon, &mi)) {
-        // Find which index this monitor matches in our list
-        for (int i = 0, monCount = GetSystemMetrics(SM_CMONITORS); i < monCount; i++) {
-          RECT r = GetMonitorRectByIndex(i);
-          if (r.left == mi.rcMonitor.left && r.top == mi.rcMonitor.top) {
-            if (g_screenIndex != i) {
-              LOG_INFO("Auto-switched g_screenIndex to %d based on selection start point", i);
-              g_screenIndex = i;
-              g_displayChangeGen++; // Force cache refresh
-            }
-            break;
-          }
-        }
+      int monIdx =
+          GetMonitorIndex(MonitorFromPoint(cur, MONITOR_DEFAULTTONEAREST));
+      if (monIdx >= 0 && monIdx != g_screenIndex) {
+        LOG_INFO("Auto-switched g_screenIndex to %d based on selection start point", monIdx);
+        g_screenIndex = monIdx;
+        g_displayChangeGen++; // Force cache refresh
       }
     } else if (g_currentSelection == SELECTING_COLOR) {
       LOG_INFO("Stage 2 LBUTTONDOWN executed");
@@ -898,13 +870,8 @@ LRESULT CALLBACK HUDWndProc(HWND hWnd, UINT message, WPARAM wParam,
         if (g_isDraggingHUD && lDown) {
           int newX = g_dragStartHUD.x + (pt.x - g_dragStartMouse.x);
           int newY = g_dragStartHUD.y + (pt.y - g_dragStartMouse.y);
-          int deltaX = newX - g_hudX;
-          int deltaY = newY - g_hudY;
           g_hudX = newX;
           g_hudY = newY;
-
-          // The dashboard is no longer dragged locally along with the HUD.
-
           InvalidateRect(hWnd, NULL, FALSE);
         }
 
@@ -926,11 +893,8 @@ LRESULT CALLBACK HUDWndProc(HWND hWnd, UINT message, WPARAM wParam,
       }
 
       g_isCursorVisible = IsCursorCurrentlyVisible();
-      float ang = g_logic.GetAngle();
-
-      // Direct assignment: no smoothing. The angle value reflects the raw
-      // mouse-delta accumulator on every frame for zero perceived delay.
-      g_interpolatedAngle = ang;
+      // No smoothing: the HUD shows the live angle every frame.
+      float ang = (float)g_logic.GetAngle();
 
       // Update tray tooltip with current angle (~2/s, no need to spam NIM_MODIFY)
       {
@@ -962,7 +926,7 @@ LRESULT CALLBACK HUDWndProc(HWND hWnd, UINT message, WPARAM wParam,
 
       if (!throttle || (nowMs - s_lastThrottledDraw >= 100)) {
         if (throttle) s_lastThrottledDraw = nowMs;
-        DrawOverlay(hWnd, g_interpolatedAngle.load(), g_showCrosshair,
+        DrawOverlay(hWnd, ang, g_showCrosshair,
                     overlayVisible);
       }
     } else if (wParam == 2) { // 30s Auto-Save Periodic Timer
@@ -1010,22 +974,11 @@ LRESULT CALLBACK HUDWndProc(HWND hWnd, UINT message, WPARAM wParam,
     int oldScreenIndex = g_screenIndex;
     // Auto-track Fortnite's monitor: hot-plugging a 2nd monitor can renumber
     // monitor indices. Find Fortnite's current monitor and update g_screenIndex.
-    HWND fnWnd = FindWindowW(NULL, L"Fortnite  ");
-    if (!fnWnd) fnWnd = FindWindowW(NULL, L"Fortnite");
-    if (fnWnd && IsWindow(fnWnd)) {
-      HMONITOR hFnMon = MonitorFromWindow(fnWnd, MONITOR_DEFAULTTONEAREST);
-      struct FindData { HMONITOR target; int currentIndex; int foundIndex; };
-      FindData data = {hFnMon, 0, -1};
-      EnumDisplayMonitors(NULL, NULL,
-        [](HMONITOR h, HDC, LPRECT, LPARAM dwData) -> BOOL {
-          auto *d = reinterpret_cast<FindData *>(dwData);
-          if (h == d->target) { d->foundIndex = d->currentIndex; return FALSE; }
-          d->currentIndex++;
-          return TRUE;
-        },
-        reinterpret_cast<LPARAM>(&data));
-      if (data.foundIndex >= 0) g_screenIndex = data.foundIndex;
+    if (HWND fnWnd = FindFortniteWindow()) {
+      int idx = GetMonitorIndex(MonitorFromWindow(fnWnd, MONITOR_DEFAULTTONEAREST));
+      if (idx >= 0) g_screenIndex = idx;
     }
+    g_displayChangeGen++; // monitor rects may have changed
 
     if (g_screenIndex != oldScreenIndex) {
       // Blank the old layered surface before moving to prevent a ghost copy
@@ -1118,11 +1071,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
   app.setQuitOnLastWindowClosed(
       false); // Prevent premature exit if windows are still initializing
 
-  // Phase 0: Kick off version check in background — never blocks startup.
-  // g_updateAvailable will be set when done; the control panel UPDATES tab
-  // shows it.
-  std::thread([]() { CheckForUpdates(); }).detach();
-
   GdiplusStartupInput gdiplusStartupInput;
   GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
 
@@ -1130,6 +1078,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
   SetLogLevel(LogLevel::Info);
   LogStartup();
   CleanupUpdateJunk();
+
+  // Kick off the version check in the background (never blocks startup).
+  // Must run after LoadSettings so the beta-channel setting is respected.
+  std::thread([]() { CheckForUpdates(); }).detach();
 
   g_allProfiles = GetProfiles(GetProfilesPath());
   if (g_allProfiles.empty()) {
@@ -1147,69 +1099,52 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_allProfiles.push_back(p);
   }
 
-  // Sensitivity is loaded from the JSON profile; Do not blindly overwrite it
-  // here.
-  if (g_selectedProfileIdx >= (int)g_allProfiles.size()) {
-    g_selectedProfileIdx = 0;
-  }
-  g_currentProfile = g_allProfiles[g_selectedProfileIdx];
-
-  g_selectedProfileIdx = 0;
+  // Pick the active profile: the one named in settings.json if it still
+  // exists, else the saved index if it's in range, else the first profile.
   bool foundProfile = false;
   for (size_t i = 0; i < g_allProfiles.size(); i++) {
     if (g_allProfiles[i].name == g_lastLoadedProfileName) {
-      g_selectedProfileIdx = i;
+      g_selectedProfileIdx = (int)i;
       foundProfile = true;
       break;
     }
   }
-
-  // Safety: If last profile not found, fall back to what was in settings.json
-  // index if that index is valid.
-  if (!foundProfile && g_selectedProfileIdx < (int)g_allProfiles.size()) {
-    // Keep original g_selectedProfileIdx loaded from settings.json
-  } else if (!foundProfile) {
+  if (!foundProfile && (g_selectedProfileIdx < 0 ||
+                        g_selectedProfileIdx >= (int)g_allProfiles.size())) {
     g_selectedProfileIdx = 0;
   }
-
-  if (g_lastLoadedProfileName.empty() && !g_allProfiles.empty()) {
-    g_lastLoadedProfileName = g_allProfiles[0].name;
-  }
-
-  g_currentProfile = g_allProfiles[g_selectedProfileIdx];
+  const Profile &startProfile = g_allProfiles[g_selectedProfileIdx];
+  g_lastLoadedProfileName = startProfile.name;
 
   // Sync Crosshair Settings from Profile to Global State
-  g_crossThickness = g_currentProfile.crossThickness;
-  g_crossColor = g_currentProfile.crossColor;
-  
-  // Only force center if it's a completely fresh start with no history
-  if (g_lastLoadedProfileName.empty()) {
-    g_crossOffsetX = 0.0f;
-    g_crossOffsetY = 0.0f;
-  } else {
-    g_crossOffsetX = g_currentProfile.crossOffsetX;
-    g_crossOffsetY = g_currentProfile.crossOffsetY;
-  }
-  
-  g_crossAngle = g_currentProfile.crossAngle;
-  g_crossPulse = g_currentProfile.crossPulse;
-  g_showCrosshair = g_currentProfile.showCrosshair;
+  g_crossThickness = startProfile.crossThickness;
+  g_crossColor = startProfile.crossColor;
+  g_crossOffsetX = startProfile.crossOffsetX;
+  g_crossOffsetY = startProfile.crossOffsetY;
+  g_crossAngle = startProfile.crossAngle;
+  g_crossPulse = startProfile.crossPulse;
+  g_showCrosshair = startProfile.showCrosshair;
 
-  // Sync monitor index from profile BEFORE using it to offset ROI coords
-  g_screenIndex = g_currentProfile.screenIndex;
+  // Sync monitor index from profile BEFORE using it to offset ROI coords.
+  // Clamp: the saved monitor may have been unplugged since last run.
+  g_screenIndex = startProfile.screenIndex;
+  if (g_screenIndex < 0 || g_screenIndex >= GetSystemMetrics(SM_CMONITORS))
+    g_screenIndex = 0;
 
-  // Sync Trigger Calibration from Profile to Global State
-  // Sync Trigger Calibration from Profile to Global State
   RECT mRect = GetMonitorRectByIndex(g_screenIndex);
-  g_selectionRect.left = g_currentProfile.roi_x + mRect.left;
-  g_selectionRect.top = g_currentProfile.roi_y + mRect.top;
-  g_selectionRect.right =
-      g_currentProfile.roi_x + g_currentProfile.roi_w + mRect.left;
-  g_selectionRect.bottom =
-      g_currentProfile.roi_y + g_currentProfile.roi_h + mRect.top;
-  g_targetColor = g_currentProfile.target_color;
 
-  g_logic.LoadProfile(g_currentProfile.sensitivityX);
+  // Keep the restored HUD box (260x150, monitor-relative) on screen in case
+  // it was saved on a larger monitor.
+  g_hudX = (std::max)(0, (std::min)(g_hudX, (int)(mRect.right - mRect.left) - 260));
+  g_hudY = (std::max)(0, (std::min)(g_hudY, (int)(mRect.bottom - mRect.top) - 150));
+
+  g_selectionRect.left = startProfile.roi_x + mRect.left;
+  g_selectionRect.top = startProfile.roi_y + mRect.top;
+  g_selectionRect.right = startProfile.roi_x + startProfile.roi_w + mRect.left;
+  g_selectionRect.bottom = startProfile.roi_y + startProfile.roi_h + mRect.top;
+  g_targetColor = startProfile.target_color;
+
+  g_logic.SetSensitivity(startProfile.sensitivityX);
 
   // Hotkeys are registered exclusively in HUDWndProc WM_CREATE.
   // NULL-window registration would steal WM_HOTKEY messages before HUD can
@@ -1225,7 +1160,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                                 HWND_MESSAGE, NULL, hInstance, NULL);
   g_hMsgWnd = hMsgWnd;
   RegisterRawMouse(hMsgWnd);
-  StartPollingThread(); // Hardware Polling: Sees through BlockInput
+  StartPollingThread();
   LOG_INFO("Raw input message window created: hwnd=0x%p", hMsgWnd);
 
   // Phase 2: Create Control Panel (Interactive) via Qt
@@ -1297,28 +1232,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
   // Startup monitor auto-detection: if Fortnite is already running when
   // BetterAngle launches, snap the HUD to its monitor immediately.
-  {
-    HWND fnWnd = FindWindowW(NULL, L"Fortnite  ");
-    if (!fnWnd) fnWnd = FindWindowW(NULL, L"Fortnite");
-    if (fnWnd && IsWindow(fnWnd)) {
-      HMONITOR hFnMon = MonitorFromWindow(fnWnd, MONITOR_DEFAULTTONEAREST);
-      struct FindData { HMONITOR target; int cur; int found; };
-      FindData fd = {hFnMon, 0, -1};
-      EnumDisplayMonitors(NULL, NULL,
-        [](HMONITOR h, HDC, LPRECT, LPARAM p) -> BOOL {
-          auto *d = reinterpret_cast<FindData *>(p);
-          if (h == d->target) { d->found = d->cur; return FALSE; }
-          d->cur++;
-          return TRUE;
-        }, reinterpret_cast<LPARAM>(&fd));
-      if (fd.found >= 0 && fd.found != g_screenIndex) {
-        g_screenIndex = fd.found;
-        RECT mRect = GetMonitorRectByIndex(g_screenIndex);
-        SetWindowPos(g_hHUD, HWND_TOPMOST, mRect.left, mRect.top,
-                     mRect.right - mRect.left, mRect.bottom - mRect.top,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        LOG_INFO("Startup monitor auto-detect: Fortnite on monitor %d", g_screenIndex);
-      }
+  if (HWND fnWnd = FindFortniteWindow()) {
+    int found = GetMonitorIndex(MonitorFromWindow(fnWnd, MONITOR_DEFAULTTONEAREST));
+    if (found >= 0 && found != g_screenIndex) {
+      g_screenIndex = found;
+      RECT fnRect = GetMonitorRectByIndex(g_screenIndex);
+      SetWindowPos(g_hHUD, HWND_TOPMOST, fnRect.left, fnRect.top,
+                   fnRect.right - fnRect.left, fnRect.bottom - fnRect.top,
+                   SWP_NOACTIVATE | SWP_SHOWWINDOW);
+      LOG_INFO("Startup monitor auto-detect: Fortnite on monitor %d", g_screenIndex);
     }
   }
 

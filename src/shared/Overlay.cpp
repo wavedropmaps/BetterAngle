@@ -61,10 +61,7 @@ static bool CheckFortniteProcessFast() {
   bool found = false;
   if (Process32FirstW(hSnap, &pe)) {
     do {
-      if (pe.szExeFile[0] &&
-          (_wcsnicmp(pe.szExeFile, L"FortniteClient-Win64-Shipping", 29) == 0 ||
-           _wcsnicmp(pe.szExeFile, L"FortniteLauncher", 16) == 0 ||
-           _wcsnicmp(pe.szExeFile, L"FortniteClient", 14) == 0)) {
+      if (IsFortniteProcessName(pe.szExeFile)) {
         found = true;
         break;
       }
@@ -253,7 +250,7 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
       HDC hdcScr = GetDC(NULL);
       HDC hdcZoom = CreateCompatibleDC(hdcMem);
       HBITMAP hbmZoom = CreateCompatibleBitmap(hdcMem, mw * 3, mh * 3);
-      SelectObject(hdcZoom, hbmZoom);
+      HGDIOBJ hOldZoom = SelectObject(hdcZoom, hbmZoom);
       StretchBlt(hdcZoom, 0, 0, mw * 3, mh * 3, hdcScr, mx, my, mw, mh,
                  SRCCOPY);
 
@@ -275,8 +272,9 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
       graphics.DrawLine(&magCross, zx, zy + (mh * 3 / 2), zx + (mw * 3),
                         zy + (mh * 3 / 2));
 
-      // Precision dot removed
-
+      // Deselect before deleting: a bitmap still selected into a DC can't be
+      // freed, which leaked one GDI handle per frame while colour picking.
+      SelectObject(hdcZoom, hOldZoom);
       DeleteObject(hbmZoom);
       DeleteDC(hdcZoom);
       ReleaseDC(NULL, hdcScr);
@@ -412,13 +410,18 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
     Pen borderPen(borderCol, 1.5f);
     graphics.DrawPath(&borderPen, &path);
 
-    // "CURRENT ANGLE" label
+    // "CURRENT ANGLE" label. In blend mode, once the mouse has moved during a
+    // dive/glide transition the reading includes estimated movement; say so
+    // (in amber) until the user zeroes the angle.
     FontFamily ff(L"Segoe UI");
     Font labelFont(&ff, 9, FontStyleBold, UnitPixel);
-    SolidBrush labelBrush(Color(160, 180, 185, 195));
+    bool estimated = g_logic.IsEstimated();
+    SolidBrush labelBrush(estimated ? Color(220, 255, 190, 70)
+                                    : Color(160, 180, 185, 195));
     StringFormat fmtLabel;
     fmtLabel.SetAlignment(StringAlignmentCenter);
-    graphics.DrawString(L"CURRENT ANGLE", -1, &labelFont,
+    graphics.DrawString(estimated ? L"~ ESTIMATED ANGLE" : L"CURRENT ANGLE", -1,
+                        &labelFont,
                         RectF(float(rx), float(ry + 8), float(rw), 18.0f),
                         &fmtLabel, &labelBrush);
 
@@ -449,13 +452,11 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
     SolidBrush yellowBrush(Color(255, 255, 220, 50));   // 2nd decimal
     SolidBrush degBrush(Color(180, 200, 200, 200));     // Degree symbol
 
-    // Use a slightly smaller font so 2-decimal numbers fit the box
-    static Font *s_angleFontSmall = nullptr;
-    if (!s_angleFontSmall)
-      s_angleFontSmall = new Font(&ff, 48, FontStyleBold, UnitPixel);
-    
-    Font *angleFontLarge = new Font(&ff, 68, FontStyleBold, UnitPixel);
-    Font *useFont = (decimals == 2) ? s_angleFontSmall : angleFontLarge;
+    // Use a slightly smaller font so 2-decimal numbers fit the box. Both are
+    // created once; GDI+ font construction every frame is wasted work.
+    static Font *s_angleFontSmall = new Font(&ff, 48, FontStyleBold, UnitPixel);
+    static Font *s_angleFontLarge = new Font(&ff, 68, FontStyleBold, UnitPixel);
+    Font *useFont = (decimals == 2) ? s_angleFontSmall : s_angleFontLarge;
 
     // Measure each segment and draw left-to-right, centred in the box
     StringFormat fmtLeft;
@@ -483,8 +484,6 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
       startX += mDec2.Width;
     }
     graphics.DrawString(degStr.c_str(), -1, useFont, PointF(startX, textY), &degBrush);
-    
-    delete angleFontLarge;
 
     // Match % label
     Font subFont(&ff, 12, FontStyleBold, UnitPixel);
@@ -523,8 +522,8 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
 
     // Target colour swatch (top-right corner)
     int swatchX = rx + rw - 28, swatchY = ry + 8;
-    Color swatch(255, GetBValue(g_targetColor), GetGValue(g_targetColor),
-                 GetRValue(g_targetColor));
+    Color swatch(255, GetRValue(g_targetColor), GetGValue(g_targetColor),
+                 GetBValue(g_targetColor));
     SolidBrush swatchB(swatch);
     graphics.FillEllipse(&swatchB, swatchX, swatchY, 16, 16);
     Pen swatchP(Color(100, 220, 220, 220), 1.0f);
@@ -629,7 +628,7 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
         reasonStr = L"Dive>Glide";
       else if (reason == 3)
         reasonStr = L"Alt-Tab";
-      DrawRow(7, 0, L"Lock Reason:", reasonStr, reason == 0);
+      DrawRow(7, 0, L"Last Transition:", reasonStr, reason == 0);
 
       DrawRow(8, 0, L"Fortnite Running:", fnRun ? L"YES" : L"NO", fnRun);
       DrawRow(9, 0, L"Fortnite Focused:", fnFoc ? L"YES" : L"NO", fnFoc);
@@ -646,8 +645,9 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
               g_scannerCpuPct.load() < 50);
 
       // Column 1: System Info (v5.5.247)
-      DrawRow(0, 1, L"Input Lock:", suspended ? L"ACTIVE" : L"IDLE", !suspended);
-      DrawRow(1, 1, L"Lock Count:", std::to_wstring(g_lockCount.load()));
+      bool blendMode = g_inputLockMode.load() == kLockModeBlend;
+      DrawRow(0, 1, L"Lock Mode:", blendMode ? L"BLEND (no lock)" : L"BLOCKINPUT");
+      DrawRow(1, 1, L"Transitions:", std::to_wstring(g_lockCount.load()));
       DrawRow(2, 1, L"Version:", L"v" + std::wstring(VERSION_WSTR), true);
       DrawRow(3, 1, L"Capture Path:", L"BitBlt", true);
 
@@ -656,6 +656,8 @@ void DrawOverlay(HWND hwnd, double angle, bool showCrosshair, bool overlayVisibl
                             std::to_wstring(GetGValue(pc)) + L"," +
                             std::to_wstring(GetBValue(pc)) + L")";
       DrawRow(4, 1, L"Target RGB:", rgbStr);
+      bool est = g_logic.IsEstimated();
+      DrawRow(5, 1, L"Angle:", est ? L"ESTIMATED" : L"EXACT", !est);
     }
   }
 

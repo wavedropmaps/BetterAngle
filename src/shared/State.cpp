@@ -1,33 +1,44 @@
 #include "shared/State.h"
 #include "shared/Logic.h"
 
+#include <climits>
+#include <fstream>
+#include <locale>
+#include <shlobj.h>
+#include <sstream>
+#include <string>
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "advapi32.lib")
+
 SelectionState g_currentSelection = NONE;
 std::atomic<bool> g_isSelectionActive{false};
 HBITMAP g_screenSnapshot = NULL;
 bool g_isDiving = false;
 bool g_showROIBox = true;
-int g_currentTab = 0;
 std::atomic<int> g_matchCount{0};
-bool g_isCheckingForUpdates = false;
-bool g_hasCheckedForUpdates = false;
-float g_updateSpinAngle = 0.0f;
-bool g_updateAvailable = false;
-bool g_isDownloadingUpdate = false;
-bool g_downloadComplete = false;
+std::atomic<bool> g_isCheckingForUpdates(false);
+std::atomic<bool> g_hasCheckedForUpdates(false);
+std::atomic<bool> g_updateAvailable(false);
+std::atomic<bool> g_isDownloadingUpdate(false);
+std::atomic<bool> g_downloadComplete(false);
+std::mutex g_updateStringsMutex;
 std::string g_updateHistory = "";
+std::string g_latestVersionOnline = "v" VERSION_STR;
 std::atomic<bool> g_fortniteFocusedCache(false);
-std::string g_lastVersionRun = "";
 std::atomic<bool> g_forceRedraw(true);
 std::atomic<bool> g_keybindAssignmentActive(false);
 std::atomic<long long> g_detectionDelayMs(0);
 std::atomic<bool> g_showDebugOverlay(false);
 std::atomic<int> g_lockTriggerReason(0);
 std::atomic<bool> g_atomicShieldEnabled(true);
-std::atomic<bool> g_directHardwareModeEnabled(true);
 std::atomic<ULONGLONG> g_lastValidMatchTime(0);
 std::atomic<int> g_lockCount(0);
 std::atomic<bool> g_blockInputActive(false);
 std::atomic<ULONGLONG> g_lastLockTime(0);
+
+std::atomic<int> g_inputLockMode(kLockModeBlockInput);
+std::atomic<int> g_transitionBlendMs(700);
+std::atomic<ULONGLONG> g_ignoreMouseUntil(0);
 
 std::atomic<bool> g_diagNoRawInput(false);
 std::atomic<bool> g_diagNoTopmost(false);
@@ -41,26 +52,41 @@ std::atomic<bool> g_physicalKeys[256] = {};
 std::atomic<bool> g_running(true);
 int g_screenIndex = 0;
 std::atomic<int> g_displayChangeGen{0};
-std::atomic<int> g_hudDecimalPlaces{2}; // Default to 2 decimal places as requested
-std::atomic<bool> g_hudSmoothingEnabled(true);
-std::atomic<float> g_interpolatedAngle(0.0f);
+std::atomic<int> g_hudDecimalPlaces{2};
 std::atomic<UINT> g_mouseButtonKeybinds[6] = {};
 std::atomic<UINT> g_mouseButtonModifiers[6] = {};
 
-Profile g_currentProfile;
 std::vector<Profile> g_allProfiles;
 int g_selectedProfileIdx = 0;
-
-// Global g_keybinds removed (v4.20.37)
 std::wstring g_lastLoadedProfileName = L"";
 
-#include <fstream>
-#include <locale>
-#include <shlobj.h>
-#include <sstream>
-#include <string>
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "advapi32.lib")
+bool g_showCrosshair = false;
+float g_crossThickness = 1.0f;
+COLORREF g_crossColor = RGB(255, 0, 0);
+float g_crossOffsetX = 0.0f;
+float g_crossOffsetY = 0.0f;
+float g_crossAngle = 0.0f;
+bool g_crossPulse = false;
+
+COLORREF g_targetColor = RGB(255, 255, 255);
+COLORREF g_pickedColor = RGB(255, 255, 255);
+RECT g_selectionRect = {0, 0, 0, 0};
+POINT g_startPoint = {0};
+
+float g_currentAngle = 0.0f;
+std::atomic<bool> g_isCursorVisible(false);
+AngleLogic g_logic(0.05);
+
+int g_hudX = 40;
+int g_hudY = 40;
+int g_dashX = INT_MIN;
+int g_dashY = INT_MIN;
+bool g_isDraggingHUD = false;
+POINT g_dragStartHUD = {0, 0};
+POINT g_dragStartMouse = {0, 0};
+HWND g_hHUD = NULL;
+HWND g_hPanel = NULL;
+HWND g_hMsgWnd = NULL;
 
 std::wstring GetAppRootPath() {
   wchar_t appdata[MAX_PATH];
@@ -83,105 +109,137 @@ std::wstring GetProfilesPath() {
   return pPath + L"\\";
 }
 
-// Legacy Registry functions removed in favor of unified hidden JSON storage.
+namespace {
+std::string WideToUtf8(const std::wstring &w) {
+  if (w.empty())
+    return "";
+  int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0,
+                              NULL, NULL);
+  std::string s(n, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, NULL,
+                      NULL);
+  return s;
+}
+
+std::wstring Utf8ToWide(const std::string &s) {
+  if (s.empty())
+    return L"";
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+  std::wstring w(n, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+  return w;
+}
+
+std::string JsonEscape(const std::string &s) {
+  std::string out;
+  for (char c : s) {
+    if (c == '"' || c == '\\')
+      out += '\\';
+    out += c;
+  }
+  return out;
+}
+
+// Reads the string value of "key":"..." (handles \" and \\ escapes).
+bool ExtractJsonString(const std::string &content, const std::string &key,
+                       std::string &out) {
+  size_t p = content.find("\"" + key + "\":");
+  if (p == std::string::npos)
+    return false;
+  p = content.find('"', p + key.length() + 3);
+  if (p == std::string::npos)
+    return false;
+  out.clear();
+  for (size_t i = p + 1; i < content.size(); ++i) {
+    char c = content[i];
+    if (c == '\\' && i + 1 < content.size()) {
+      out += content[++i];
+    } else if (c == '"') {
+      return true;
+    } else {
+      out += c;
+    }
+  }
+  return false;
+}
+} // namespace
 
 void LoadSettings() {
   std::wstring sp = GetAppRootPath() + L"settings.json";
   std::ifstream ifs(sp.c_str());
-  if (ifs.is_open()) {
-    std::string content;
-    ifs.seekg(0, std::ios::end);
-    content.reserve((size_t)ifs.tellg());
-    ifs.seekg(0, std::ios::beg);
-    content.assign((std::istreambuf_iterator<char>(ifs)),
-                   std::istreambuf_iterator<char>());
-
-    auto eFloat = [&](std::string k, float def) -> float {
-      size_t p = content.find("\"" + k + "\":");
-      if (p == std::string::npos)
-        return def;
-      size_t valStart =
-          content.find_first_not_of(" \t\n\r", p + k.length() + 2);
-      if (valStart == std::string::npos)
-        return def;
-      try {
-        std::istringstream iss(content.substr(valStart));
-        iss.imbue(std::locale("C"));
-        float v;
-        iss >> v;
-        return v;
-      } catch (...) {
-        return def;
-      }
-    };
-    auto eInt = [&](std::string k, int def) -> int {
-      size_t p = content.find("\"" + k + "\":");
-      if (p == std::string::npos)
-        return def;
-      size_t valStart =
-          content.find_first_not_of(" \t\n\r", p + k.length() + 2);
-      if (valStart == std::string::npos)
-        return def;
-      try {
-        return std::stoi(content.substr(valStart));
-      } catch (...) {
-        return def;
-      }
-    };
-
-    g_hudX = eInt("hudX", 40);
-    g_hudY = eInt("hudY", 40);
-    g_dashX = eInt("dashX", INT_MIN);
-    g_dashY = eInt("dashY", INT_MIN);
-
-    g_crossPulse = eFloat("crossPulse", 0.0f) > 0.5f;
-    g_showCrosshair = eFloat("showCrosshair", 1.0f) > 0.5f;
-    g_selectedProfileIdx = eInt("selectedProfileIdx", 0);
-    g_screenIndex = eInt("screenIndex", 0);
-
-    g_diagNoRawInput = eFloat("diagNoRawInput", 0.0f) > 0.5f;
-    g_diagNoTopmost = eFloat("diagNoTopmost", 0.0f) > 0.5f;
-    g_diagNoTimer = eFloat("diagNoTimer", 0.0f) > 0.5f;
-    g_betaUpdates = eFloat("betaUpdates", 0.0f) > 0.5f;
-
-    size_t vp = content.find("\"lastVersionRun\":\"");
-    if (vp != std::string::npos) {
-      size_t valS = vp + 18;
-      size_t end = content.find("\"", valS);
-      if (end != std::string::npos)
-        g_lastVersionRun = content.substr(valS, end - valS);
-    }
-
-    size_t pp = content.find("\"lastProfile\":\"");
-    if (pp != std::string::npos) {
-      size_t valS = pp + 15;
-      size_t end = content.find("\"", valS);
-      if (end != std::string::npos) {
-        std::string n = content.substr(valS, end - valS);
-        g_lastLoadedProfileName = std::wstring(n.begin(), n.end());
-      }
-    }
-  } else {
+  if (!ifs.is_open()) {
     // Migration: Check if it exists in the OLD path (profiles/settings.json)
     std::wstring oldPath = GetProfilesPath() + L"settings.json";
-    if (GetFileAttributesW(oldPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-      MoveFileW(oldPath.c_str(), sp.c_str());
+    if (GetFileAttributesW(oldPath.c_str()) != INVALID_FILE_ATTRIBUTES &&
+        MoveFileW(oldPath.c_str(), sp.c_str())) {
       LoadSettings();
-      return;
     }
+    return;
   }
+
+  std::string content((std::istreambuf_iterator<char>(ifs)),
+                      std::istreambuf_iterator<char>());
+
+  auto valueStart = [&](const std::string &k) -> size_t {
+    size_t p = content.find("\"" + k + "\":");
+    if (p == std::string::npos)
+      return std::string::npos;
+    return content.find_first_not_of(" \t\n\r", p + k.length() + 3);
+  };
+  auto eFloat = [&](const std::string &k, float def) -> float {
+    size_t valStart = valueStart(k);
+    if (valStart == std::string::npos)
+      return def;
+    std::istringstream iss(content.substr(valStart));
+    iss.imbue(std::locale("C"));
+    float v = def;
+    if (!(iss >> v))
+      return def;
+    return v;
+  };
+  auto eInt = [&](const std::string &k, int def) -> int {
+    size_t valStart = valueStart(k);
+    if (valStart == std::string::npos)
+      return def;
+    try {
+      return std::stoi(content.substr(valStart));
+    } catch (...) {
+      return def;
+    }
+  };
+
+  g_hudX = eInt("hudX", 40);
+  g_hudY = eInt("hudY", 40);
+  g_dashX = eInt("dashX", INT_MIN);
+  g_dashY = eInt("dashY", INT_MIN);
+
+  g_showCrosshair = eFloat("showCrosshair", 1.0f) > 0.5f;
+  g_selectedProfileIdx = eInt("selectedProfileIdx", 0);
+  g_screenIndex = eInt("screenIndex", 0);
+
+  // Before v6.0.5 this loader never actually read any value (an off-by-one
+  // parsed ":" as the number), so the old diag* keys may hold toggles from
+  // long-forgotten test sessions. Read them under new names so a stale
+  // "raw input disabled" can't silently kill angle tracking after updating.
+  g_diagNoRawInput = eFloat("diag2NoRawInput", 0.0f) > 0.5f;
+  g_diagNoTopmost = eFloat("diag2NoTopmost", 0.0f) > 0.5f;
+  g_diagNoTimer = eFloat("diag2NoTimer", 0.0f) > 0.5f;
+  g_betaUpdates = eFloat("betaUpdates", 0.0f) > 0.5f;
+
+  int mode = eInt("inputLockMode", kLockModeBlockInput);
+  g_inputLockMode =
+      (mode == kLockModeBlend) ? kLockModeBlend : kLockModeBlockInput;
+  int blendMs = eInt("transitionBlendMs", 700);
+  g_transitionBlendMs = blendMs < 100 ? 100 : (blendMs > 2000 ? 2000 : blendMs);
+
+  std::string lastProfile;
+  if (ExtractJsonString(content, "lastProfile", lastProfile))
+    g_lastLoadedProfileName = Utf8ToWide(lastProfile);
 }
 
 void SaveSettings() {
   std::wstring sp = GetAppRootPath() + L"settings.json";
   std::wstring tempPath = sp + L".tmp";
-
-  // Ensure file is not hidden before writing to avoid permission issues
-  SetFileAttributesW(sp.c_str(), FILE_ATTRIBUTE_NORMAL);
-
-  std::ofstream ofs(tempPath.c_str(), std::ios::trunc);
-  if (!ofs.is_open())
-    return;
 
   std::ostringstream oss;
   oss.imbue(std::locale("C"));
@@ -195,80 +253,86 @@ void SaveSettings() {
   oss << "  \"selectedProfileIdx\": " << g_selectedProfileIdx << ",\n";
   oss << "  \"screenIndex\": " << g_screenIndex << ",\n";
 
-  oss << "  \"diagNoRawInput\": " << (g_diagNoRawInput ? 1 : 0) << ",\n";
-  oss << "  \"diagNoTopmost\": " << (g_diagNoTopmost ? 1 : 0) << ",\n";
-  oss << "  \"diagNoTimer\": " << (g_diagNoTimer ? 1 : 0) << ",\n";
+  oss << "  \"diag2NoRawInput\": " << (g_diagNoRawInput ? 1 : 0) << ",\n";
+  oss << "  \"diag2NoTopmost\": " << (g_diagNoTopmost ? 1 : 0) << ",\n";
+  oss << "  \"diag2NoTimer\": " << (g_diagNoTimer ? 1 : 0) << ",\n";
   oss << "  \"betaUpdates\": " << (g_betaUpdates ? 1 : 0) << ",\n";
+  oss << "  \"inputLockMode\": " << g_inputLockMode.load() << ",\n";
+  oss << "  \"transitionBlendMs\": " << g_transitionBlendMs.load() << ",\n";
   oss << "  \"lastVersionRun\":\"" << VERSION_STR << "\",\n";
-
-  std::string lp;
-  for (wchar_t c : g_lastLoadedProfileName)
-    lp += (char)c;
-  oss << "  \"lastProfile\":\"" << lp << "\"\n";
+  oss << "  \"lastProfile\":\""
+      << JsonEscape(WideToUtf8(g_lastLoadedProfileName)) << "\"\n";
   oss << "}\n";
 
-  ofs << oss.str();
-  ofs.close();
+  {
+    std::ofstream ofs(tempPath.c_str(), std::ios::trunc);
+    if (!ofs.is_open())
+      return;
+    ofs << oss.str();
+    if (!ofs.good())
+      return;
+  }
 
-  // Atomic swap: delete old, rename temp to real
-  DeleteFileW(sp.c_str());
-  MoveFileW(tempPath.c_str(), sp.c_str());
-
-  // Set to hidden after saving
+  // Hidden files can't be replaced by MoveFileEx; clear the flag first.
+  SetFileAttributesW(sp.c_str(), FILE_ATTRIBUTE_NORMAL);
+  // Single replace step: a crash can never leave us with no settings file.
+  MoveFileExW(tempPath.c_str(), sp.c_str(),
+              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
   SetFileAttributesW(sp.c_str(), FILE_ATTRIBUTE_HIDDEN);
 }
 
-bool g_showCrosshair = false;
-float g_crossThickness = 1.0f;
-COLORREF g_crossColor = RGB(255, 0, 0);
-float g_crossOffsetX = 0.0f;
-float g_crossOffsetY = 0.0f;
-float g_crossAngle = 0.0f;
-bool g_crossPulse = false;
+namespace {
+struct MonitorEnumData {
+  int targetIndex;
+  HMONITOR targetMonitor;
+  int currentIndex;
+  int foundIndex;
+  RECT rect;
+};
 
-COLORREF g_targetColor = RGB(255, 255, 255);
-COLORREF g_pickedColor = RGB(255, 255, 255);
-float g_latestVersion = 4.920f;
-std::wstring g_latestName = L"Pending Scan";
-RECT g_selectionRect = {0, 0, 0, 0};
-POINT g_startPoint = {0};
-
-std::string g_latestVersionOnline = "v" VERSION_STR;
-float g_currentAngle = 0.0f;
-std::atomic<bool> g_isCursorVisible(false);
-AngleLogic g_logic(0.05);
-
-int g_hudX = 40;
-int g_hudY = 40;
-int g_dashX = INT_MIN;
-int g_dashY = INT_MIN;
-bool g_isDraggingHUD = false;
-POINT g_dragStartHUD = {0, 0};
-POINT g_dragStartMouse = {0, 0};
-HWND g_hHUD = NULL;
-HWND g_hPanel = NULL;
-HWND g_hMsgWnd = NULL;
+BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC, LPRECT lprcMonitor,
+                              LPARAM dwData) {
+  auto d = reinterpret_cast<MonitorEnumData *>(dwData);
+  if (d->currentIndex == d->targetIndex || hMonitor == d->targetMonitor) {
+    d->foundIndex = d->currentIndex;
+    d->rect = *lprcMonitor;
+    return FALSE;
+  }
+  d->currentIndex++;
+  return TRUE;
+}
+} // namespace
 
 RECT GetMonitorRectByIndex(int index) {
-  struct RectData {
-    int targetIndex;
-    int currentIndex;
-    RECT rect;
-  } data = {index, 0, {0, 0, 0, 0}};
+  MonitorEnumData data = {index, NULL, 0, -1, {0, 0, 0, 0}};
+  EnumDisplayMonitors(NULL, NULL, MonitorEnumProc,
+                      reinterpret_cast<LPARAM>(&data));
+  if (data.foundIndex >= 0)
+    return data.rect;
 
-  EnumDisplayMonitors(
-      NULL, NULL,
-      [](HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor,
-         LPARAM dwData) -> BOOL {
-        auto d = reinterpret_cast<RectData *>(dwData);
-        if (d->currentIndex == d->targetIndex) {
-          d->rect = *lprcMonitor;
-          return FALSE; // Found it
-        }
-        d->currentIndex++;
-        return TRUE;
-      },
-      reinterpret_cast<LPARAM>(&data));
+  // Index no longer exists: fall back to the primary monitor so the HUD is
+  // never sized to an empty 0x0 rect (which makes it invisible).
+  HMONITOR primary = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO mi = {sizeof(mi)};
+  if (GetMonitorInfoW(primary, &mi))
+    return mi.rcMonitor;
+  return {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+}
 
-  return data.rect;
+int GetMonitorIndex(HMONITOR monitor) {
+  if (!monitor)
+    return -1;
+  MonitorEnumData data = {-1, monitor, 0, -1, {0, 0, 0, 0}};
+  EnumDisplayMonitors(NULL, NULL, MonitorEnumProc,
+                      reinterpret_cast<LPARAM>(&data));
+  return data.foundIndex;
+}
+
+HWND FindFortniteWindow() {
+  // Fortnite's window title has carried a trailing double space for years;
+  // check the plain title too in case that ever changes.
+  HWND fnWnd = FindWindowW(NULL, L"Fortnite  ");
+  if (!fnWnd)
+    fnWnd = FindWindowW(NULL, L"Fortnite");
+  return (fnWnd && IsWindow(fnWnd)) ? fnWnd : NULL;
 }

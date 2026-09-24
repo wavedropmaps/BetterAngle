@@ -1,6 +1,6 @@
-import QtQuick 2.15
-import QtQuick.Window 2.15
-import QtQuick.Controls 2.15
+import QtQuick
+import QtQuick.Window
+import QtQuick.Controls.Basic
 
 Window {
     id: mainWindow
@@ -30,10 +30,6 @@ Window {
     // Frameless window style for a custom sleek look
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint
 
-    onVisibleChanged: {
-        // No longer forcing crosshair state here to allow user preference to persist
-    }
-
     // True only while we apply the saved position on startup. Setting x/y here
     // fires onXChanged/onYChanged; without this guard the restore would call
     // syncHudToWindow and yank the HUD onto the dashboard's monitor, overriding
@@ -44,7 +40,17 @@ Window {
         // Restore last saved position; fall back to screen centre on first run.
         var sx = backend ? backend.savedDashX : -2147483648
         var sy = backend ? backend.savedDashY : -2147483648
-        if (sx !== -2147483648 && sy !== -2147483648) {
+        // Only restore if the title bar would land on a connected screen;
+        // the saved monitor may have been unplugged since last run.
+        var onScreen = false
+        var screens = Qt.application.screens
+        for (var i = 0; i < screens.length; i++) {
+            var sc = screens[i]
+            if (sx + 40 >= sc.virtualX && sx + 40 < sc.virtualX + sc.width &&
+                sy + 20 >= sc.virtualY && sy + 20 < sc.virtualY + sc.height)
+                onScreen = true
+        }
+        if (sx !== -2147483648 && sy !== -2147483648 && onScreen) {
             x = sx
             y = sy
         } else {
@@ -72,7 +78,7 @@ Window {
 
     // Restore + focus when the user clicks the taskbar icon (frameless windows
     // need this because the shell cannot manage them natively).
-    onVisibilityChanged: {
+    onVisibilityChanged: function(visibility) {
         if (visibility === Window.Windowed || visibility === Window.Maximized) {
             raise()
             requestActivate()
@@ -81,7 +87,7 @@ Window {
 
     Connections {
         target: backend
-        onShowControlPanelRequested: {
+        function onShowControlPanelRequested() {
             // If the window is currently the active foreground window, minimise it.
             // If it's in the background or minimised, restore and focus it.
             if (mainWindow.active) {
@@ -100,7 +106,13 @@ Window {
         id: titleBar
         width: parent.width
         height: 40
-        color: "#181824"
+        color: "#12121a"
+
+        Rectangle {
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+            height: 1
+            color: "#24243a"
+        }
         
         Image {
             id: logo
@@ -154,8 +166,7 @@ Window {
     // Resize handles for frameless window
     Item {
         anchors.fill: parent
-        z: 1 // above background but below titleBar? Actually titleBar is at z 0, we want resize areas behind titleBar? We'll keep above but exclude titleBar area.
-        // We'll make the resize areas only at edges, excluding central area where titleBar and dashboard are.
+        z: 1 // 5px edge strips + 10px corners; the centre stays free for the UI.
 
         // Left edge
         MouseArea {
@@ -177,7 +188,7 @@ Window {
             drag { target: null; axis: Drag.XAxis; threshold: 0 }
             onPressed: mainWindow.startSystemResize(Qt.RightEdge)
         }
-        // Top edge (excluding titleBar area? We'll allow top edge resize but titleBar will also capture mouse)
+        // Top edge
         MouseArea {
             anchors.left: parent.left
             anchors.right: parent.right
@@ -304,7 +315,7 @@ Window {
                 PropertyAnimation on width {
                     id: progressAnim
                     from: 0
-                    to: 520
+                    to: loadingTrack.width
                     duration: 2500
                     running: mainWindow.isBooting
                 }

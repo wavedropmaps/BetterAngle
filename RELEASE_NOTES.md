@@ -1,3 +1,19 @@
+### BetterAngle Pro v6.0.5
+- **New: Choose how dive/glide transitions are handled** (General tab). *Block input* is the existing behaviour: input is frozen for ~0.7s so the angle stays exact, but a key released during the freeze can stick (ghost walking). *Blend (no lock)* never touches your input; the angle eases between glide and dive turn speed instead, with an adjustable blend duration. If you move the mouse mid-transition the HUD shows "~ ESTIMATED ANGLE" until you reset. See `docs/INPUT_LOCK.md`.
+- **Fix: Angle could slowly drift**. The detector thread re-baked the angle ~250 times a second while the input thread was adding mouse movement, so counts could be dropped and a "zero" could be overwritten. The angle is now integrated per movement under a lock.
+- **Fix: Input lock fired with no ROI set**. With no detection area selected, the app treated you as diving from launch, froze input for 700ms at startup and used the dive turn speed until an area was picked.
+- **Fix: Alt-tabbing out mid-dive froze input on the desktop**. Losing Fortnite focus looked like a dive-to-glide change and triggered a 700ms lock in whatever app you switched to. Transitions are now only tracked while Fortnite is focused.
+- **Fix: Settings never loaded**. An off-by-one in the settings reader meant saved HUD position, beta channel and other settings always fell back to defaults. They now restore (the auto-mantle diagnostic switches start fresh once so stale test values can't disable tracking).
+- **Fix: GDI leak while colour picking**. The zoom preview leaked one GDI bitmap per frame; after ~1.5 minutes of picking, drawing broke.
+- **Fix: Truncated update installers could run**. Downloads now check the HTTP status, detect dropped connections and compare against Content-Length. An error page from GitHub can no longer be parsed as a version number.
+- **Fix: Beta channel ignored at startup**. The startup update check ran before settings were loaded.
+- **Fix: HUD invisible after unplugging its monitor**. A missing monitor index now falls back to the primary monitor; the saved HUD and dashboard positions are kept on screen.
+- **Fix: Colour swatch had red and blue swapped; black crosshair colour couldn't be saved; profile names with quotes corrupted the file; profile and settings saves could be lost if the app crashed mid-write.**
+- **Fix: Dashboard fields for target colour and HUD position were always blank** (the backend never exposed them).
+- **Performance**: slider changes no longer rewrite both JSON files on every tick; the Debug tab polls at 10 Hz instead of 100 Hz and no longer snapshots every process on each refresh.
+- **UI**: Dashboard reorganised into cards with consistent controls, styled sliders, switches and dropdowns, and clearer Debug tab sections.
+- **Cleanup**: Removed unused key-injection code, dead settings (HUD smoothing, direct hardware mode), old `_old`/`_114` source copies, the unused ImGui copy, stray logs/patches/IDE files and an unrelated web app.
+
 ### BetterAngle Pro v6.0.4
 - **Fix: Startup crash when saved profile index is out of range**. If `settings.json` held a `selectedProfileIdx` pointing to a profile that no longer exists (e.g. after deleting a profile), the app would crash immediately on launch before any UI appeared. The index is now clamped to a valid range before use.
 - **Fix: Ghost HUD on monitor hotplug/unplug**. `WM_DISPLAYCHANGE` was moving the overlay window to the new monitor with a direct `SetWindowPos`, skipping the ghost-prevention blank that drag and the Display dropdown already use. Unplugging a monitor while the overlay was on it could leave a frozen HUD copy on the desktop. The handler now blanks and hides the old layered surface before repositioning, matching the `WM_USER+101` path.
